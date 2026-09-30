@@ -127,7 +127,8 @@
     const userId = tg.initDataUnsafe?.user?.id || 123456789;
     
     // Change this once you deploy your Render backend URL later
-    const API_BASE = "https://your-backend-url.onrender.com";
+    const API_BASE = "https://lhr.life";
+    
 
     // Fetch user points on load
     async function loadUserData() {
@@ -171,7 +172,7 @@
       tg.MainButton.setText("Generating 3D...").show();
 
       try {
-        const res = await fetch(`${API_BASE}/api/generate-3d`, {
+        const res = await fetch(`${API_BASE}/process-3d`, {
           method: "POST",
           body: formData
         });
