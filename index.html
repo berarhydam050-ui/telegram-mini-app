@@ -1,0 +1,202 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>FixKendra 3D Studio</title>
+  <!-- Telegram Web App SDK -->
+  <script src="https://telegram.org/js/telegram-web-app.js"></script>
+  <script type="module" src="https://ajax.googleapis.com/ajax/libs/model-viewer/3.4.0/model-viewer.min.js"></script>
+  <style>
+    :root {
+      /* Automatically adapt to Telegram's theme */
+      --bg-color: var(--tg-theme-bg-color, #121212);
+      --text-color: var(--tg-theme-text-color, #ffffff);
+      --card-bg: var(--tg-theme-secondary-bg-color, #1e1e1e);
+      --button-color: var(--tg-theme-button-color, #0088cc);
+      --button-text: var(--tg-theme-button-text-color, #ffffff);
+      --hint-color: var(--tg-theme-hint-color, #888888);
+    }
+
+    body {
+      background-color: var(--bg-color);
+      color: var(--text-color);
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      margin: 0;
+      padding: 16px;
+      box-sizing: border-box;
+    }
+
+    h2 { text-align: center; margin-bottom: 20px; }
+
+    .card {
+      background-color: var(--card-bg);
+      border-radius: 12px;
+      padding: 16px;
+      margin-bottom: 14px;
+      box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+    }
+
+    .card h3 { margin-top: 0; font-size: 16px; }
+
+    .hint { color: var(--hint-color); font-size: 13px; margin-top: 5px; }
+
+    .btn {
+      background-color: var(--button-color);
+      color: var(--button-text);
+      border: none;
+      padding: 12px;
+      border-radius: 8px;
+      font-weight: bold;
+      width: 100%;
+      cursor: pointer;
+      text-align: center;
+      display: block;
+      text-decoration: none;
+      margin-top: 10px;
+      box-sizing: border-box;
+    }
+
+    input[type="text"], input[type="file"] {
+      width: 100%;
+      padding: 10px;
+      margin-top: 8px;
+      border-radius: 8px;
+      border: 1px solid var(--hint-color);
+      background: var(--bg-color);
+      color: var(--text-color);
+      box-sizing: border-box;
+    }
+
+    model-viewer {
+      width: 100%;
+      height: 300px;
+      background: #000;
+      border-radius: 8px;
+      margin-top: 10px;
+    }
+  </style>
+</head>
+<body>
+
+  <h2>FixKendra 3D Studio</h2>
+
+  <!-- Status Card -->
+  <div class="card">
+    <h3>Account Status</h3>
+    <p>Daily Points Progress: <span id="dailyProgress">0</span> / 15</p>
+    <p>Wallet Balance: <span id="walletBalance">0</span> Points</p>
+    <div class="hint">Earn points through daily ads/tasks or pay via UPI below.</div>
+  </div>
+
+  <!-- UPI Payment Card -->
+  <div class="card">
+    <h3>Instant Unlock (₹6 via UPI)</h3>
+    <div class="hint">Tap below to pay using Google Pay, PhonePe, or Paytm:</div>
+    <!-- Replace YOUR_UPI_ID with your actual UPI handle -->
+    <a href="upi://pay?pa=YOUR_UPI_ID@okicici&pn=FixKendra&am=6&cu=INR&tn=3D_Generation" class="btn" style="background: #28a745;">
+      Pay ₹6 via UPI App
+    </a>
+    <div style="margin-top: 12px;">
+      <label class="hint">Enter 12-Digit UTR / Transaction ID after payment:</label>
+      <input type="text" id="utrInput" maxlength="12" placeholder="e.g. 423156789012">
+      <button class="btn" onclick="submitUTR()">Verify & Credit Points</button>
+    </div>
+  </div>
+
+  <!-- Generation Card -->
+  <div class="card">
+    <h3>Generate 3D Model</h3>
+    <label class="hint">Upload a clear photo (PNG/JPG):</label>
+    <input type="file" id="imageInput" accept="image/*">
+    <button class="btn" onclick="generate3D()">Generate 3D (15 Points)</button>
+  </div>
+
+  <!-- 3D Result Viewer Card -->
+  <div class="card" id="viewerCard" style="display:none;">
+    <h3>Your 3D Model is Ready!</h3>
+    <model-viewer id="modelViewer" camera-controls auto-rotate shadow-intensity="1"></model-viewer>
+    <a id="dlBtn" download="model.glb" class="btn" style="background:#17a2b8; margin-top: 12px;">Download .GLB File</a>
+  </div>
+
+  <script>
+    const tg = window.Telegram.WebApp;
+    tg.expand(); // Make app full screen
+
+    // Get Telegram User ID safely
+    const userId = tg.initDataUnsafe?.user?.id || 123456789;
+    
+    // Change this once you deploy your Render backend URL later
+    const API_BASE = "https://your-backend-url.onrender.com";
+
+    // Fetch user points on load
+    async function loadUserData() {
+      try {
+        const res = await fetch(`${API_BASE}/api/user/${userId}`);
+        const data = await res.json();
+        document.getElementById('dailyProgress').innerText = data.daily_points;
+        document.getElementById('walletBalance').innerText = data.wallet_points;
+      } catch (e) {
+        console.log("Backend offline or loading...");
+      }
+    }
+
+    async function submitUTR() {
+      const utr = document.getElementById('utrInput').value.trim();
+      if (utr.length !== 12 || isNaN(utr)) {
+        alert("Please enter a valid 12-digit UTR transaction number.");
+        return;
+      }
+
+      const res = await fetch(`${API_BASE}/api/submit-utr`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ telegram_id: userId, utr: utr })
+      });
+      const data = await res.json();
+      alert(data.message);
+    }
+
+    async function generate3D() {
+      const fileInput = document.getElementById('imageInput');
+      if (!fileInput.files[0]) {
+        alert("Please select an image file first!");
+        return;
+      }
+
+      const formData = new FormData();
+      formData.append("telegram_id", userId);
+      formData.append("image", fileInput.files[0]);
+
+      tg.MainButton.setText("Generating 3D...").show();
+
+      try {
+        const res = await fetch(`${API_BASE}/api/generate-3d`, {
+          method: "POST",
+          body: formData
+        });
+
+        if (!res.ok) {
+          const errText = await res.text();
+          throw new Error(errText);
+        }
+
+        const blob = await res.blob();
+        const url = URL.createObjectURL(blob);
+        
+        document.getElementById('modelViewer').src = url;
+        document.getElementById('dlBtn').href = url;
+        document.getElementById('viewerCard').style.display = 'block';
+        loadUserData();
+        alert("3D Model generated successfully!");
+      } catch (e) {
+        alert("Generation failed: " + e.message);
+      } finally {
+        tg.MainButton.hide();
+      }
+    }
+
+    loadUserData();
+  </script>
+</body>
+</html>
