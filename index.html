@@ -7,12 +7,13 @@
   
   <!-- Telegram WebApp SDK -->
   <script src="https://telegram.org/js/telegram-web-app.js"></script>
-  
-  <!-- Inter Font & FontAwesome Icons -->
-  <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+  <script>
+    // Signal Telegram immediately to show content without waiting for all assets
+    if (window.Telegram && window.Telegram.WebApp) {
+      window.Telegram.WebApp.ready();
+      window.Telegram.WebApp.expand();
+    }
+  </script>
 
   <style>
     :root {
@@ -29,7 +30,7 @@
       box-sizing: border-box;
       margin: 0;
       padding: 0;
-      font-family: 'Inter', sans-serif;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
       -webkit-tap-highlight-color: transparent;
     }
 
@@ -304,27 +305,19 @@
     <!-- Top Header -->
     <div class="header-card">
       <div class="brand">
-        <div class="brand-icon">
-          <i class="fa-solid fa-cube"></i>
-        </div>
+        <div class="brand-icon">📦</div>
         <div>
           <div class="brand-title">SF3D Studio</div>
           <span class="brand-badge">v1.0 RTX 4090</span>
         </div>
       </div>
-      <button class="demo-btn">
-        Demo Mode <i class="fa-solid fa-sliders"></i>
-      </button>
+      <button class="demo-btn">Demo Mode ⚙️</button>
     </div>
 
     <!-- Navigation Tabs -->
     <div class="nav-tabs">
-      <button class="tab-btn active" onclick="switchTab('app')">
-        <i class="fa-solid fa-border-all"></i> App
-      </button>
-      <button class="tab-btn" onclick="switchTab('code')">
-        <i class="fa-solid fa-code"></i> Production Code Studio
-      </button>
+      <button class="tab-btn active" onclick="switchTab('app')">📱 App</button>
+      <button class="tab-btn" onclick="switchTab('code')">💻 Production Code Studio</button>
     </div>
 
     <!-- APP TAB PANEL -->
@@ -332,26 +325,18 @@
       <!-- Photo Source Section -->
       <div class="content-card">
         <div class="card-title-row">
-          <div class="card-title">
-            <i class="fa-solid fa-camera" style="color: #818cf8;"></i> Photo Source
-          </div>
+          <div class="card-title">📷 PHOTO SOURCE</div>
           <div class="card-subtitle">JPG, PNG, WEBP</div>
         </div>
 
         <div class="upload-box">
-          <div class="upload-icon">
-            <i class="fa-solid fa-cloud-arrow-up"></i>
-          </div>
+          <div class="upload-icon">☁️</div>
           <div class="upload-heading">Tap or drag image here</div>
           <div class="upload-subtext">Single object with clear lighting recommended</div>
           
           <div class="button-group">
-            <button class="action-btn">
-              <i class="fa-solid fa-folder-open"></i> Browse File
-            </button>
-            <button class="action-btn primary">
-              <i class="fa-solid fa-camera"></i> Mobile Camera
-            </button>
+            <button class="action-btn">📁 Browse File</button>
+            <button class="action-btn primary">📷 Mobile Camera</button>
           </div>
         </div>
       </div>
@@ -361,17 +346,17 @@
         <div class="card-title-row">
           <div class="card-title">
             <span style="height: 8px; width: 8px; background: #10b981; border-radius: 50%; display: inline-block;"></span>
-            Interactive 3D Canvas
+            INTERACTIVE 3D CANVAS
           </div>
           <div class="icon-btn-group">
-            <button class="icon-btn"><i class="fa-solid fa-rotate"></i></button>
-            <button class="icon-btn"><i class="fa-solid fa-expand"></i></button>
-            <button class="icon-btn success"><i class="fa-solid fa-download"></i></button>
+            <button class="icon-btn">🔄</button>
+            <button class="icon-btn">⛶</button>
+            <button class="icon-btn success">⬇️</button>
           </div>
         </div>
 
         <div class="canvas-viewport">
-          3D Model Viewport Area
+          Interactive 3D Model Viewport Area
         </div>
       </div>
     </div>
@@ -380,12 +365,10 @@
     <div id="panel-code" class="panel">
       <div class="content-card">
         <div class="card-title-row">
-          <div class="card-title">
-            <i class="fa-solid fa-terminal" style="color: #818cf8;"></i> Production Server Files
-          </div>
+          <div class="card-title">🖥️ PRODUCTION SERVER FILES</div>
         </div>
         <p style="font-size: 12px; color: var(--text-muted); margin-bottom: 12px;">
-          Copy pre-configured deployment files for your API stack.
+          Copy pre-configured code files to deploy your custom SF3D API stack.
         </p>
 
         <div class="code-box">
@@ -405,24 +388,18 @@ app.listen(3000);
   </div>
 
   <script>
-    // Initialize Telegram WebApp SDK
-    document.addEventListener("DOMContentLoaded", () => {
-      if (window.Telegram && window.Telegram.WebApp) {
-        window.Telegram.WebApp.ready();
-        window.Telegram.WebApp.expand();
-      }
-    });
-
-    // Tab Switching Logic
     function switchTab(tabName) {
-      document.querySelectorAll('.tab-btn').forEach(btn => btn.classList.remove('active'));
-      document.querySelectorAll('.panel').forEach(panel => panel.classList.remove('active'));
+      const tabs = document.querySelectorAll('.tab-btn');
+      const panels = document.querySelectorAll('.panel');
+      
+      tabs.forEach(btn => btn.classList.remove('active'));
+      panels.forEach(panel => panel.classList.remove('active'));
 
       if (tabName === 'app') {
-        document.querySelectorAll('.tab-btn')[0].classList.add('active');
+        tabs[0].classList.add('active');
         document.getElementById('panel-app').classList.add('active');
       } else {
-        document.querySelectorAll('.tab-btn')[1].classList.add('active');
+        tabs[1].classList.add('active');
         document.getElementById('panel-code').classList.add('active');
       }
     }
