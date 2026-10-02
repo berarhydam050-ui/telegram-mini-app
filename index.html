@@ -1,3 +1,4 @@
+
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -7,6 +8,9 @@
 
   <!-- Telegram WebApp SDK -->
   <script src="https://telegram.org/js/telegram-web-app.js"></script>
+  <!-- Google Model Viewer for GLB 3D Preview -->
+  <script type="module" src="https://ajax.googleapis.com/ajax/libs/model-viewer/3.4.0/model-viewer.min.js"></script>
+
   <script>
     if (window.Telegram && window.Telegram.WebApp) {
       window.Telegram.WebApp.ready();
@@ -20,7 +24,6 @@
       --card-bg: #121824;
       --card-border: #1e293b;
       --accent-purple: #6366f1;
-      --accent-blue: #3b82f6;
       --text-main: #f8fafc;
       --text-muted: #94a3b8;
     }
@@ -74,13 +77,11 @@
       align-items: center;
       justify-content: center;
       font-size: 22px;
-      color: white;
     }
 
     .brand-title {
       font-size: 18px;
       font-weight: 700;
-      line-height: 1.2;
     }
 
     .brand-badge {
@@ -91,7 +92,6 @@
       border-radius: 20px;
       border: 1px solid #312e81;
       display: inline-block;
-      margin-top: 2px;
     }
 
     .content-card {
@@ -116,11 +116,6 @@
       align-items: center;
       gap: 8px;
       text-transform: uppercase;
-    }
-
-    .card-subtitle {
-      font-size: 11px;
-      color: var(--text-muted);
     }
 
     .upload-box {
@@ -155,17 +150,6 @@
       display: none;
     }
 
-    .upload-heading {
-      font-size: 14px;
-      font-weight: 600;
-    }
-
-    .upload-subtext {
-      font-size: 11px;
-      color: var(--text-muted);
-      max-width: 240px;
-    }
-
     .button-group {
       display: flex;
       gap: 10px;
@@ -196,7 +180,7 @@
 
     .canvas-viewport {
       width: 100%;
-      height: 240px;
+      height: 260px;
       background: #070a0f;
       border-radius: 12px;
       border: 1px solid var(--card-border);
@@ -206,46 +190,66 @@
       justify-content: center;
       color: var(--text-muted);
       font-size: 13px;
-      gap: 10px;
       padding: 16px;
       text-align: center;
+      position: relative;
     }
 
-    .icon-btn-group {
-      display: flex;
-      gap: 6px;
+    model-viewer {
+      width: 100%;
+      height: 100%;
+      background-color: transparent;
+      display: none;
     }
 
-    .icon-btn {
-      width: 32px;
-      height: 32px;
-      background: #1e293b;
-      border: 1px solid #334155;
-      color: white;
-      border-radius: 8px;
-      display: flex;
+    /* Live Camera Modal Viewport */
+    .camera-modal {
+      display: none;
+      position: fixed;
+      inset: 0;
+      background: #000;
+      z-index: 9999;
+      flex-direction: column;
       align-items: center;
-      justify-content: center;
-      font-size: 12px;
-      cursor: pointer;
+      justify-content: space-between;
+      padding: 20px;
     }
 
-    .icon-btn.success {
-      background: #10b981;
-      border-color: #10b981;
+    .camera-video {
+      width: 100%;
+      height: 70vh;
+      object-fit: cover;
+      border-radius: 16px;
+      background: #111;
     }
 
-    /* Hidden Native File Inputs */
-    #galleryInput, #cameraInput {
+    .camera-controls {
+      display: flex;
+      gap: 16px;
+      width: 100%;
+      max-width: 400px;
+      margin-bottom: 20px;
+    }
+
+    #galleryInput {
       display: none;
     }
   </style>
 </head>
 <body>
 
-  <!-- Direct Native Inputs -->
+  <!-- Hidden Gallery Input -->
   <input type="file" id="galleryInput" accept="image/*">
-  <input type="file" id="cameraInput" accept="image/*" capture="environment">
+
+  <!-- Native Camera Stream Modal -->
+  <div class="camera-modal" id="cameraModal">
+    <video id="cameraStream" autoplay playsinline class="camera-video"></video>
+    <div class="camera-controls">
+      <button class="action-btn" type="button" onclick="closeCameraModal()">❌ Cancel</button>
+      <button class="action-btn primary" type="button" onclick="takePhoto()">📸 Capture Photo</button>
+    </div>
+    <canvas id="snapshotCanvas" style="display:none;"></canvas>
+  </div>
 
   <div class="app-container">
     <div class="header-card">
@@ -261,7 +265,6 @@
     <div class="content-card">
       <div class="card-title-row">
         <div class="card-title">📷 Select Image</div>
-        <div class="card-subtitle">JPG, PNG, WEBP</div>
       </div>
 
       <div class="upload-box">
@@ -270,144 +273,136 @@
           <img id="previewImg" class="preview-img" alt="Preview">
         </div>
         <div class="upload-heading" id="uploadHeading">Upload or Take Photo</div>
-        <div class="upload-subtext" id="uploadSubtext">Single subject with clear lighting works best</div>
+        <div style="font-size: 11px; color: var(--text-muted);" id="uploadSubtext">Single subject with clear lighting works best</div>
 
         <div class="button-group">
           <button class="action-btn" type="button" onclick="openGallery()">📁 Gallery</button>
-          <button class="action-btn primary" type="button" onclick="openCamera()">📷 Take Photo</button>
+          <button class="action-btn primary" type="button" onclick="launchLiveCamera()">📷 Take Photo</button>
         </div>
       </div>
     </div>
 
     <div class="content-card">
       <div class="card-title-row">
-        <div class="card-title">
-          <span style="height: 8px; width: 8px; background: #10b981; border-radius: 50%; display: inline-block;"></span>
-          3D MODEL VIEWPORT
-        </div>
-        <div class="icon-btn-group">
-          <button class="icon-btn" onclick="resetCanvas()">🔄</button>
-          <button class="icon-btn success" id="downloadBtn" style="display:none;" onclick="download3DMesh()">⬇️</button>
-        </div>
+        <div class="card-title">🟢 3D MODEL VIEWPORT</div>
       </div>
       
       <div class="canvas-viewport" id="canvasViewport">
         <p id="canvasStatus">Upload an image to start 3D generation</p>
-        <button class="action-btn primary" id="generateBtn" style="display:none; max-width: 220px;" onclick="startRunPodGeneration()">⚡ Generate 3D Model</button>
+        <model-viewer id="3dViewer" camera-controls auto-rotate shadow-intensity="1"></model-viewer>
+        <button class="action-btn primary" id="generateBtn" style="display:none; max-width: 220px; margin-top: 12px;" onclick="generate3DModel()">⚡ Generate 3D Model</button>
       </div>
     </div>
   </div>
 
   <script>
-    const RUNPOD_ENDPOINT_ID = "bs1w90sxxkdyfs";
-    const RUNPOD_API_KEY = "YOUR_RUNPOD_API_KEY"; // Replace with your RunPod API Key
+    let selectedFileBlob = null;
+    let cameraMediaStream = null;
 
-    let currentBase64Image = null;
-
+    // 1. Gallery File Selection
     function openGallery() {
       const galleryInput = document.getElementById('galleryInput');
       galleryInput.value = '';
       galleryInput.click();
     }
 
-    function openCamera() {
-      const cameraInput = document.getElementById('cameraInput');
-      cameraInput.value = '';
-      cameraInput.click();
-    }
-
-    function handleImageSelection(event) {
-      const file = event.target.files[0];
+    document.getElementById('galleryInput').addEventListener('change', (e) => {
+      const file = e.target.files[0];
       if (file) {
+        selectedFileBlob = file;
         const reader = new FileReader();
-        reader.onload = function(e) {
-          currentBase64Image = e.target.result.split(',')[1];
-          document.getElementById('previewImg').src = e.target.result;
-          document.getElementById('previewImg').style.display = 'block';
-          document.getElementById('iconEmoji').style.display = 'none';
-
-          document.getElementById('uploadHeading').innerText = "Image Loaded!";
-          document.getElementById('uploadSubtext').innerText = file.name || "Captured Photo";
-          document.getElementById('generateBtn').style.display = 'inline-block';
-          
-          if (window.Telegram?.WebApp?.HapticFeedback) {
-            window.Telegram.WebApp.HapticFeedback.notificationOccurred('success');
-          }
+        reader.onload = (event) => {
+          showPreview(event.target.result, file.name);
         };
         reader.readAsDataURL(file);
       }
-    }
+    });
 
-    document.getElementById('galleryInput').addEventListener('change', handleImageSelection);
-    document.getElementById('cameraInput').addEventListener('change', handleImageSelection);
-
-    async function startRunPodGeneration() {
-      if (!currentBase64Image) return;
-
-      const status = document.getElementById('canvasStatus');
-      const genBtn = document.getElementById('generateBtn');
-      genBtn.style.display = 'none';
-      status.innerHTML = "🚀 Booting GPU Worker... (Cold start ~30-60s)";
-
+    // 2. Direct Camera Stream (Bypasses Android File Picker Override)
+    async function launchLiveCamera() {
       try {
-        const response = await fetch(`https://api.runpod.ai/v2/${RUNPOD_ENDPOINT_ID}/run`, {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            "Authorization": `Bearer ${RUNPOD_API_KEY}`
-          },
-          body: JSON.stringify({ input: { image: currentBase64Image } })
+        cameraMediaStream = await navigator.mediaDevices.getUserMedia({
+          video: { facingMode: { ideal: "environment" } },
+          audio: false
         });
-
-        const data = await response.json();
-        if (data.id) {
-          pollStatus(data.id);
-        } else {
-          status.innerText = "❌ Failed to queue task.";
-        }
+        const video = document.getElementById('cameraStream');
+        video.srcObject = cameraMediaStream;
+        document.getElementById('cameraModal').style.display = 'flex';
       } catch (err) {
-        status.innerText = "❌ Network error starting generation.";
+        alert("Unable to access camera directly. Please grant camera permissions in Telegram settings.");
       }
     }
 
-    async function pollStatus(jobId) {
-      const status = document.getElementById('canvasStatus');
-      
-      const check = async () => {
-        try {
-          const res = await fetch(`https://api.runpod.ai/v2/${RUNPOD_ENDPOINT_ID}/status/${jobId}`, {
-            headers: { "Authorization": `Bearer ${RUNPOD_API_KEY}` }
-          });
-          const data = await res.json();
+    function takePhoto() {
+      const video = document.getElementById('cameraStream');
+      const canvas = document.getElementById('snapshotCanvas');
+      canvas.width = video.videoWidth || 640;
+      canvas.height = video.videoHeight || 480;
 
-          if (data.status === "IN_QUEUE") {
-            status.innerHTML = "⏳ Spinning up GPU container...";
-            setTimeout(check, 3000);
-          } else if (data.status === "IN_PROGRESS") {
-            status.innerHTML = "⚡ GPU Active: Synthesizing 3D Mesh...";
-            setTimeout(check, 2000);
-          } else if (data.status === "COMPLETED") {
-            status.innerHTML = "✅ <strong>3D Model Ready!</strong>";
-            document.getElementById('downloadBtn').style.display = 'inline-flex';
-          } else if (data.status === "FAILED") {
-            status.innerText = "❌ Generation failed: " + (data.error || "Error");
-          }
-        } catch (e) {
-          setTimeout(check, 3000);
-        }
-      };
-      check();
+      const ctx = canvas.getContext('2d');
+      ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+
+      canvas.toBlob((blob) => {
+        selectedFileBlob = blob;
+        const dataUrl = canvas.toDataURL('image/jpeg');
+        showPreview(dataUrl, "Captured Photo.jpg");
+        closeCameraModal();
+      }, 'image/jpeg', 0.95);
     }
 
-    function resetCanvas() {
-      document.getElementById('canvasStatus').innerText = "Upload an image to start 3D generation";
-      document.getElementById('generateBtn').style.display = 'none';
-      document.getElementById('downloadBtn').style.display = 'none';
-      document.getElementById('previewImg').style.display = 'none';
-      document.getElementById('iconEmoji').style.display = 'inline';
-      document.getElementById('uploadHeading').innerText = "Upload or Take Photo";
-      document.getElementById('uploadSubtext').innerText = "Single subject with clear lighting works best";
-      currentBase64Image = null;
+    function closeCameraModal() {
+      if (cameraMediaStream) {
+        cameraMediaStream.getTracks().forEach(track => track.stop());
+        cameraMediaStream = null;
+      }
+      document.getElementById('cameraModal').style.display = 'none';
+    }
+
+    function showPreview(src, title) {
+      document.getElementById('previewImg').src = src;
+      document.getElementById('previewImg').style.display = 'block';
+      document.getElementById('iconEmoji').style.display = 'none';
+      document.getElementById('uploadHeading').innerText = "Image Selected";
+      document.getElementById('uploadSubtext').innerText = title;
+      document.getElementById('generateBtn').style.display = 'inline-flex';
+    }
+
+    // 3. Backend Generation Request (To server.js /api/generate-3d)
+    async function generate3DModel() {
+      if (!selectedFileBlob) return;
+
+      const status = document.getElementById('canvasStatus');
+      const genBtn = document.getElementById('generateBtn');
+      const viewer = document.getElementById('3dViewer');
+
+      genBtn.style.display = 'none';
+      viewer.style.display = 'none';
+      status.style.display = 'block';
+      status.innerHTML = "🚀 Uploading to RTX 4090 GPU...<br><span style='font-size:11px; color:#94a3b8;'>SF3D mesh extraction running (~5-10s)</span>";
+
+      const formData = new FormData();
+      formData.append('image', selectedFileBlob, 'upload.jpg');
+
+      try {
+        const response = await fetch('/api/generate-3d', {
+          method: 'POST',
+          body: formData
+        });
+
+        const result = await response.json();
+
+        if (result.success && result.model_url) {
+          status.style.display = 'none';
+          viewer.src = result.model_url;
+          viewer.style.display = 'block';
+        } else {
+          status.innerText = "❌ " + (result.error || "Generation failed on GPU worker.");
+          genBtn.style.display = 'inline-flex';
+        }
+      } catch (err) {
+        status.innerText = "❌ Failed to reach backend server.";
+        genBtn.style.display = 'inline-flex';
+      }
     }
   </script>
 </body>
