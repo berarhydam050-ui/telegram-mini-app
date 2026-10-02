@@ -1,4 +1,3 @@
-
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -231,19 +230,20 @@
       margin-bottom: 20px;
     }
 
-    #galleryInput {
+    #galleryInput, #nativeCameraInput {
       display: none;
     }
   </style>
 </head>
 <body>
 
-  <!-- Hidden Gallery Input -->
+  <!-- Native Hidden Inputs -->
   <input type="file" id="galleryInput" accept="image/*">
+  <input type="file" id="nativeCameraInput" accept="image/*" capture="environment">
 
-  <!-- Native Camera Stream Modal -->
+  <!-- HTML Canvas Fallback Camera Modal -->
   <div class="camera-modal" id="cameraModal">
-    <video id="cameraStream" autoplay playsinline class="camera-video"></video>
+    <video id="cameraStream" autoplay playsinline muted class="camera-video"></video>
     <div class="camera-controls">
       <button class="action-btn" type="button" onclick="closeCameraModal()">❌ Cancel</button>
       <button class="action-btn primary" type="button" onclick="takePhoto()">📸 Capture Photo</button>
@@ -277,7 +277,7 @@
 
         <div class="button-group">
           <button class="action-btn" type="button" onclick="openGallery()">📁 Gallery</button>
-          <button class="action-btn primary" type="button" onclick="launchLiveCamera()">📷 Take Photo</button>
+          <button class="action-btn primary" type="button" onclick="launchCamera()">📷 Take Photo</button>
         </div>
       </div>
     </div>
@@ -299,43 +299,57 @@
     let selectedFileBlob = null;
     let cameraMediaStream = null;
 
-    // 1. Gallery File Selection
     function openGallery() {
       const galleryInput = document.getElementById('galleryInput');
       galleryInput.value = '';
       galleryInput.click();
     }
 
-    document.getElementById('galleryInput').addEventListener('change', (e) => {
+    document.getElementById('galleryInput').addEventListener('change', handleFileSelected);
+    document.getElementById('nativeCameraInput').addEventListener('change', handleFileSelected);
+
+    function handleFileSelected(e) {
       const file = e.target.files[0];
       if (file) {
         selectedFileBlob = file;
         const reader = new FileReader();
         reader.onload = (event) => {
-          showPreview(event.target.result, file.name);
+          showPreview(event.target.result, file.name || "Captured Photo");
         };
         reader.readAsDataURL(file);
       }
-    });
+    }
 
-    // 2. Direct Camera Stream (Bypasses Android File Picker Override)
-    async function launchLiveCamera() {
-      try {
-        cameraMediaStream = await navigator.mediaDevices.getUserMedia({
-          video: { facingMode: { ideal: "environment" } },
-          audio: false
-        });
-        const video = document.getElementById('cameraStream');
-        video.srcObject = cameraMediaStream;
-        document.getElementById('cameraModal').style.display = 'flex';
-      } catch (err) {
-        alert("Unable to access camera directly. Please grant camera permissions in Telegram settings.");
+    async function launchCamera() {
+      // Step 1: Try getUserMedia with broad constraints to fix black screen
+      if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
+        try {
+          cameraMediaStream = await navigator.mediaDevices.getUserMedia({
+            video: { facingMode: "environment" },
+            audio: false
+          });
+          const video = document.getElementById('cameraStream');
+          video.srcObject = cameraMediaStream;
+          
+          // Wait for stream video track to render
+          await video.play();
+          document.getElementById('cameraModal').style.display = 'flex';
+          return;
+        } catch (err) {
+          console.warn("Direct video stream blocked by Android WebView, falling back to system capture.", err);
+        }
       }
+
+      // Step 2: Native Android System File/Camera Fallback
+      const nativeInput = document.getElementById('nativeCameraInput');
+      nativeInput.value = '';
+      nativeInput.click();
     }
 
     function takePhoto() {
       const video = document.getElementById('cameraStream');
       const canvas = document.getElementById('snapshotCanvas');
+      
       canvas.width = video.videoWidth || 640;
       canvas.height = video.videoHeight || 480;
 
@@ -367,7 +381,6 @@
       document.getElementById('generateBtn').style.display = 'inline-flex';
     }
 
-    // 3. Backend Generation Request (To server.js /api/generate-3d)
     async function generate3DModel() {
       if (!selectedFileBlob) return;
 
