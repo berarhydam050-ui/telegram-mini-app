@@ -133,7 +133,6 @@
       align-items: center;
       gap: 12px;
       background: rgba(15, 23, 42, 0.4);
-      cursor: pointer;
     }
 
     .upload-icon {
@@ -236,68 +235,17 @@
       border-color: #10b981;
     }
 
-    #fileInput, #cameraInputFallback {
+    /* Hidden Native File Inputs */
+    #galleryInput, #cameraInput {
       display: none;
-    }
-
-    /* Live Camera Overlay Modal */
-    .camera-modal {
-      display: none;
-      position: fixed;
-      inset: 0;
-      background: #000000;
-      z-index: 9999;
-      flex-direction: column;
-      align-items: center;
-      justify-content: space-between;
-      padding: 20px;
-    }
-
-    .camera-view {
-      width: 100%;
-      height: 75vh;
-      border-radius: 16px;
-      object-fit: cover;
-      background: #111;
-    }
-
-    .camera-controls {
-      display: flex;
-      gap: 16px;
-      width: 100%;
-      max-width: 400px;
-      margin-bottom: 10px;
-    }
-
-    .capture-circle-btn {
-      width: 60px;
-      height: 60px;
-      border-radius: 50%;
-      background: #ffffff;
-      border: 4px solid var(--accent-purple);
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      font-size: 20px;
-      cursor: pointer;
     }
   </style>
 </head>
 <body>
 
-  <!-- Hidden Fallback Inputs -->
-  <input type="file" id="fileInput" accept="image/*">
-  <input type="file" id="cameraInputFallback" accept="image/*" capture="environment">
-
-  <!-- Live Camera Modal Container -->
-  <div class="camera-modal" id="cameraModal">
-    <video id="cameraStream" autoplay playsinline class="camera-view"></video>
-    <div class="camera-controls">
-      <button class="action-btn" type="button" onclick="closeLiveCamera()">❌ Cancel</button>
-      <button class="capture-circle-btn" type="button" onclick="captureLivePhoto()">📸</button>
-    </div>
-    <canvas id="snapshotCanvas" style="display:none;"></canvas>
-  </div>
+  <!-- Direct Native Inputs -->
+  <input type="file" id="galleryInput" accept="image/*">
+  <input type="file" id="cameraInput" accept="image/*" capture="environment">
 
   <div class="app-container">
     <div class="header-card">
@@ -316,17 +264,17 @@
         <div class="card-subtitle">JPG, PNG, WEBP</div>
       </div>
 
-      <div class="upload-box" onclick="triggerFileBrowser()">
+      <div class="upload-box">
         <div class="upload-icon">
           <span id="iconEmoji">☁️</span>
           <img id="previewImg" class="preview-img" alt="Preview">
         </div>
-        <div class="upload-heading" id="uploadHeading">Tap to upload or take a photo</div>
+        <div class="upload-heading" id="uploadHeading">Upload or Take Photo</div>
         <div class="upload-subtext" id="uploadSubtext">Single subject with clear lighting works best</div>
 
         <div class="button-group">
-          <button class="action-btn" type="button" onclick="event.stopPropagation(); triggerFileBrowser();">📁 Gallery</button>
-          <button class="action-btn primary" type="button" onclick="event.stopPropagation(); openCamera();">📷 Mobile Camera</button>
+          <button class="action-btn" type="button" onclick="openGallery()">📁 Gallery</button>
+          <button class="action-btn primary" type="button" onclick="openCamera()">📷 Take Photo</button>
         </div>
       </div>
     </div>
@@ -352,67 +300,20 @@
 
   <script>
     const RUNPOD_ENDPOINT_ID = "bs1w90sxxkdyfs";
-    const RUNPOD_API_KEY = "YOUR_RUNPOD_API_KEY"; // Replace with your actual RunPod API key
+    const RUNPOD_API_KEY = "YOUR_RUNPOD_API_KEY"; // Replace with your RunPod API Key
 
     let currentBase64Image = null;
-    let activeStream = null;
 
-    function triggerFileBrowser() {
-      document.getElementById('fileInput').click();
+    function openGallery() {
+      const galleryInput = document.getElementById('galleryInput');
+      galleryInput.value = '';
+      galleryInput.click();
     }
 
-    async function openCamera() {
-      if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
-        try {
-          activeStream = await navigator.mediaDevices.getUserMedia({
-            video: { facingMode: { ideal: "environment" } },
-            audio: false
-          });
-          const videoElem = document.getElementById('cameraStream');
-          videoElem.srcObject = activeStream;
-          document.getElementById('cameraModal').style.display = 'flex';
-          return;
-        } catch (err) {
-          console.warn("MediaDevices failed, resorting to standard input capture", err);
-        }
-      }
-      // Fallback if WebView blocks getUserMedia
-      document.getElementById('cameraInputFallback').click();
-    }
-
-    function captureLivePhoto() {
-      const videoElem = document.getElementById('cameraStream');
-      const canvas = document.getElementById('snapshotCanvas');
-      canvas.width = videoElem.videoWidth || 640;
-      canvas.height = videoElem.videoHeight || 480;
-
-      const ctx = canvas.getContext('2d');
-      ctx.drawImage(videoElem, 0, 0, canvas.width, canvas.height);
-
-      const dataUrl = canvas.toDataURL('image/jpeg', 0.9);
-      currentBase64Image = dataUrl.split(',')[1];
-
-      document.getElementById('previewImg').src = dataUrl;
-      document.getElementById('previewImg').style.display = 'block';
-      document.getElementById('iconEmoji').style.display = 'none';
-
-      document.getElementById('uploadHeading').innerText = "Photo Captured!";
-      document.getElementById('uploadSubtext').innerText = "Ready to create 3D mesh";
-      document.getElementById('generateBtn').style.display = 'inline-block';
-
-      closeLiveCamera();
-
-      if (window.Telegram?.WebApp?.HapticFeedback) {
-        window.Telegram.WebApp.HapticFeedback.notificationOccurred('success');
-      }
-    }
-
-    function closeLiveCamera() {
-      if (activeStream) {
-        activeStream.getTracks().forEach(track => track.stop());
-        activeStream = null;
-      }
-      document.getElementById('cameraModal').style.display = 'none';
+    function openCamera() {
+      const cameraInput = document.getElementById('cameraInput');
+      cameraInput.value = '';
+      cameraInput.click();
     }
 
     function handleImageSelection(event) {
@@ -425,8 +326,8 @@
           document.getElementById('previewImg').style.display = 'block';
           document.getElementById('iconEmoji').style.display = 'none';
 
-          document.getElementById('uploadHeading').innerText = "Image Selected!";
-          document.getElementById('uploadSubtext').innerText = file.name;
+          document.getElementById('uploadHeading').innerText = "Image Loaded!";
+          document.getElementById('uploadSubtext').innerText = file.name || "Captured Photo";
           document.getElementById('generateBtn').style.display = 'inline-block';
           
           if (window.Telegram?.WebApp?.HapticFeedback) {
@@ -437,8 +338,8 @@
       }
     }
 
-    document.getElementById('fileInput').addEventListener('change', handleImageSelection);
-    document.getElementById('cameraInputFallback').addEventListener('change', handleImageSelection);
+    document.getElementById('galleryInput').addEventListener('change', handleImageSelection);
+    document.getElementById('cameraInput').addEventListener('change', handleImageSelection);
 
     async function startRunPodGeneration() {
       if (!currentBase64Image) return;
@@ -504,7 +405,7 @@
       document.getElementById('downloadBtn').style.display = 'none';
       document.getElementById('previewImg').style.display = 'none';
       document.getElementById('iconEmoji').style.display = 'inline';
-      document.getElementById('uploadHeading').innerText = "Tap to upload or take a photo";
+      document.getElementById('uploadHeading').innerText = "Upload or Take Photo";
       document.getElementById('uploadSubtext').innerText = "Single subject with clear lighting works best";
       currentBase64Image = null;
     }
