@@ -1,132 +1,431 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>SF 3D Studio</title>
-    <script src="https://telegram.org"></script>
-    <style>
-        :root {
-            --tg-theme-bg-color: #121212;
-            --tg-theme-text-color: #ffffff;
-            --tg-theme-card-bg: #1e1e1e;
-            --tg-theme-button-color: #0088cc;
-            --tg-theme-button-text-color: #ffffff;
-            --tg-theme-hint-color: #888888;
-        }
-        body {
-            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-            background-color: var(--tg-theme-bg-color);
-            color: var(--tg-theme-text-color);
-            margin: 0; padding: 16px;
-        }
-        .card {
-            background-color: var(--tg-theme-card-bg);
-            border-radius: 12px; padding: 16px; margin-bottom: 14px;
-            box-shadow: 0 4px 6px rgba(0,0,0,0.3);
-        }
-        .btn {
-            background-color: var(--tg-theme-button-color);
-            color: var(--tg-theme-button-text-color);
-            border: none; border-radius: 8px; padding: 12px;
-            font-size: 16px; font-weight: bold; width: 100%; cursor: pointer;
-            text-align: center; display: block; text-decoration: none;
-        }
-        .btn:disabled { opacity: 0.5; }
-        input[type="text"], input[type="file"] {
-            width: 100%; padding: 10px; margin-top: 8px; border-radius: 8px;
-            border: 1px solid var(--tg-theme-hint-color);
-            background: var(--tg-theme-bg-color); color: var(--tg-theme-text-color);
-            box-sizing: border-box;
-        }
-        .status { font-size: 14px; text-align: center; margin-top: 10px; color: #0088cc; }
-    </style>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>SF3D Studio</title>
+  
+  <!-- Telegram WebApp SDK -->
+  <script src="https://telegram.org/js/telegram-web-app.js"></script>
+  
+  <!-- Inter Font & FontAwesome Icons -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+
+  <style>
+    :root {
+      --bg-dark: #0b0e14;
+      --card-bg: #121824;
+      --card-border: #1e293b;
+      --accent-purple: #6366f1;
+      --accent-blue: #3b82f6;
+      --text-main: #f8fafc;
+      --text-muted: #94a3b8;
+    }
+
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+      font-family: 'Inter', sans-serif;
+      -webkit-tap-highlight-color: transparent;
+    }
+
+    body {
+      background-color: var(--bg-dark);
+      color: var(--text-main);
+      padding: 12px;
+      display: flex;
+      justify-content: center;
+    }
+
+    .app-container {
+      width: 100%;
+      max-width: 480px;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+
+    /* Top Header Bar */
+    .header-card {
+      background: var(--card-bg);
+      border: 1px solid var(--card-border);
+      border-radius: 16px;
+      padding: 14px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .brand-icon {
+      width: 42px;
+      height: 42px;
+      background: linear-gradient(135deg, #a855f7, #6366f1);
+      border-radius: 12px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 20px;
+      color: white;
+    }
+
+    .brand-title {
+      font-size: 18px;
+      font-weight: 700;
+      line-height: 1.2;
+    }
+
+    .brand-badge {
+      font-size: 10px;
+      background: #1e1b4b;
+      color: #818cf8;
+      padding: 3px 8px;
+      border-radius: 20px;
+      border: 1px solid #312e81;
+      display: inline-block;
+      margin-top: 2px;
+    }
+
+    .demo-btn {
+      background: #1e293b;
+      border: 1px solid #334155;
+      color: var(--text-main);
+      padding: 8px 14px;
+      border-radius: 10px;
+      font-size: 12px;
+      font-weight: 600;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      cursor: pointer;
+    }
+
+    /* Navigation Tabs */
+    .nav-tabs {
+      display: flex;
+      background: var(--card-bg);
+      padding: 4px;
+      border-radius: 12px;
+      border: 1px solid var(--card-border);
+      gap: 4px;
+    }
+
+    .tab-btn {
+      flex: 1;
+      padding: 10px 12px;
+      border: none;
+      background: transparent;
+      color: var(--text-muted);
+      font-size: 13px;
+      font-weight: 600;
+      border-radius: 8px;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
+      transition: all 0.2s ease;
+    }
+
+    .tab-btn.active {
+      background: var(--accent-purple);
+      color: white;
+    }
+
+    /* Card Panels */
+    .panel {
+      display: none;
+      flex-direction: column;
+      gap: 12px;
+    }
+
+    .panel.active {
+      display: flex;
+    }
+
+    .content-card {
+      background: var(--card-bg);
+      border: 1px solid var(--card-border);
+      border-radius: 16px;
+      padding: 16px;
+    }
+
+    .card-title-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 12px;
+    }
+
+    .card-title {
+      font-size: 13px;
+      font-weight: 700;
+      letter-spacing: 0.5px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      text-transform: uppercase;
+    }
+
+    .card-subtitle {
+      font-size: 11px;
+      color: var(--text-muted);
+    }
+
+    /* Upload Box */
+    .upload-box {
+      border: 2px dashed #334155;
+      border-radius: 12px;
+      padding: 24px 16px;
+      text-align: center;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 12px;
+      background: rgba(15, 23, 42, 0.4);
+    }
+
+    .upload-icon {
+      width: 48px;
+      height: 48px;
+      background: rgba(99, 102, 241, 0.15);
+      color: var(--accent-purple);
+      border-radius: 50%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 20px;
+    }
+
+    .upload-heading {
+      font-size: 14px;
+      font-weight: 600;
+    }
+
+    .upload-subtext {
+      font-size: 11px;
+      color: var(--text-muted);
+      max-width: 220px;
+    }
+
+    .button-group {
+      display: flex;
+      gap: 10px;
+      width: 100%;
+      margin-top: 8px;
+    }
+
+    .action-btn {
+      flex: 1;
+      padding: 10px;
+      border-radius: 8px;
+      border: 1px solid #334155;
+      background: #1e293b;
+      color: white;
+      font-size: 12px;
+      font-weight: 600;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
+      cursor: pointer;
+    }
+
+    .action-btn.primary {
+      background: var(--accent-purple);
+      border-color: var(--accent-purple);
+    }
+
+    /* Canvas Section */
+    .canvas-viewport {
+      width: 100%;
+      height: 220px;
+      background: #070a0f;
+      border-radius: 12px;
+      border: 1px solid var(--card-border);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: var(--text-muted);
+      font-size: 12px;
+    }
+
+    .icon-btn-group {
+      display: flex;
+      gap: 6px;
+    }
+
+    .icon-btn {
+      width: 32px;
+      height: 32px;
+      background: #1e293b;
+      border: 1px solid #334155;
+      color: white;
+      border-radius: 8px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 12px;
+      cursor: pointer;
+    }
+
+    .icon-btn.success {
+      background: #10b981;
+      border-color: #10b981;
+    }
+
+    /* Code View */
+    .code-box {
+      background: #070a0f;
+      border: 1px solid var(--card-border);
+      border-radius: 10px;
+      padding: 12px;
+      font-family: monospace;
+      font-size: 12px;
+      color: #38bdf8;
+      overflow-x: auto;
+      white-space: pre;
+    }
+  </style>
 </head>
 <body>
-    <h2>SF 3D Studio</h2>
 
-    <!-- Account Balance Card -->
-    <div class="card">
-        <h3>Account Status</h3>
-        <p>Daily Points Progress: <span id="dailyProgress">0</span> / 15</p>
-        <p>Wallet Balance: <span id="walletBalance">0</span> Points</p>
+  <div class="app-container">
+    
+    <!-- Top Header -->
+    <div class="header-card">
+      <div class="brand">
+        <div class="brand-icon">
+          <i class="fa-solid fa-cube"></i>
+        </div>
+        <div>
+          <div class="brand-title">SF3D Studio</div>
+          <span class="brand-badge">v1.0 RTX 4090</span>
+        </div>
+      </div>
+      <button class="demo-btn">
+        Demo Mode <i class="fa-solid fa-sliders"></i>
+      </button>
     </div>
 
-    <!-- Payment Area -->
-    <div class="card">
-        <h3>Instant Unlock</h3>
-        <p style="font-size: 13px; color: var(--tg-theme-hint-color);">Pay ₹6 via UPI to get instant points</p>
-        <a href="upi://pay?pa=YOUR_UPI_ID@okicici&pn=FixKendra&am=6&cu=INR&tn=3D_Generation" class="btn">Pay ₹6 via UPI App</a>
-        
-        <label style="display:block; margin-top:12px;">Enter 12-Digit UTR Number after payment:</label>
-        <input type="text" id="utrInput" placeholder="e.g. 423156789012">
-        <button class="btn" style="margin-top: 8px;" onclick="submitUTR()">Verify & Credit Points</button>
+    <!-- Navigation Tabs -->
+    <div class="nav-tabs">
+      <button class="tab-btn active" onclick="switchTab('app')">
+        <i class="fa-solid fa-border-all"></i> App
+      </button>
+      <button class="tab-btn" onclick="switchTab('code')">
+        <i class="fa-solid fa-code"></i> Production Code Studio
+      </button>
     </div>
 
-    <!-- Generation Workspace -->
-    <div class="card">
-        <h3>Generate 3D Model</h3>
-        <label>Upload a clean photo (PNG/JPG):</label>
-        <input type="file" id="imageInput" accept="image/*">
-        <button class="btn" id="generateBtn" style="margin-top: 12px;" onclick="generate3D()">Generate 3D (15 Points)</button>
-        <div class="status" id="statusMessage"></div>
+    <!-- APP TAB PANEL -->
+    <div id="panel-app" class="panel active">
+      <!-- Photo Source Section -->
+      <div class="content-card">
+        <div class="card-title-row">
+          <div class="card-title">
+            <i class="fa-solid fa-camera" style="color: #818cf8;"></i> Photo Source
+          </div>
+          <div class="card-subtitle">JPG, PNG, WEBP</div>
+        </div>
+
+        <div class="upload-box">
+          <div class="upload-icon">
+            <i class="fa-solid fa-cloud-arrow-up"></i>
+          </div>
+          <div class="upload-heading">Tap or drag image here</div>
+          <div class="upload-subtext">Single object with clear lighting recommended</div>
+          
+          <div class="button-group">
+            <button class="action-btn">
+              <i class="fa-solid fa-folder-open"></i> Browse File
+            </button>
+            <button class="action-btn primary">
+              <i class="fa-solid fa-camera"></i> Mobile Camera
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Interactive Canvas Section -->
+      <div class="content-card">
+        <div class="card-title-row">
+          <div class="card-title">
+            <span style="height: 8px; width: 8px; background: #10b981; border-radius: 50%; display: inline-block;"></span>
+            Interactive 3D Canvas
+          </div>
+          <div class="icon-btn-group">
+            <button class="icon-btn"><i class="fa-solid fa-rotate"></i></button>
+            <button class="icon-btn"><i class="fa-solid fa-expand"></i></button>
+            <button class="icon-btn success"><i class="fa-solid fa-download"></i></button>
+          </div>
+        </div>
+
+        <div class="canvas-viewport">
+          3D Model Viewport Area
+        </div>
+      </div>
     </div>
 
-    <script>
-        const tg = window.Telegram.WebApp;
-        tg.ready();
-        tg.expand();
+    <!-- CODE TAB PANEL -->
+    <div id="panel-code" class="panel">
+      <div class="content-card">
+        <div class="card-title-row">
+          <div class="card-title">
+            <i class="fa-solid fa-terminal" style="color: #818cf8;"></i> Production Server Files
+          </div>
+        </div>
+        <p style="font-size: 12px; color: var(--text-muted); margin-bottom: 12px;">
+          Copy pre-configured deployment files for your API stack.
+        </p>
 
-        const API_BASE = "https://lhr.life";
-        const userId = tg.initDataUnsafe?.user?.id || "6187218793";
+        <div class="code-box">
+const express = require('express');
+const multer = require('multer');
+const app = express();
 
-        // Handle UTR submission
-        async function submitUTR() {
-            const utr = document.getElementById('utrInput').value.trim();
-            if (utr.length !== 12 || isNaN(utr)) {
-                alert("Please enter a valid 12-digit UTR transaction number.");
-                return;
-            }
-            alert("UTR submitted for verification! Points will credit shortly.");
-        }
+app.post('/api/generate-3d', (req, res) => {
+  res.json({ status: "processing", modelUrl: "/outputs/model.glb" });
+});
 
-        // Handle 3D Engine compilation call
-        async function generate3D() {
-            const fileInput = document.getElementById('imageInput');
-            const statusMessage = document.getElementById('statusMessage');
-            const generateBtn = document.getElementById('generateBtn');
+app.listen(3000);
+        </div>
+      </div>
+    </div>
 
-            if (!fileInput.files[0]) {
-                alert("Please select an image file first!");
-                return;
-            }
+  </div>
 
-            generateBtn.disabled = true;
-            statusMessage.innerText = "Sending image to your Termux phone environment...";
+  <script>
+    // Initialize Telegram WebApp SDK
+    document.addEventListener("DOMContentLoaded", () => {
+      if (window.Telegram && window.Telegram.WebApp) {
+        window.Telegram.WebApp.ready();
+        window.Telegram.WebApp.expand();
+      }
+    });
 
-            const formData = new FormData();
-            formData.append('telegram_id', userId);
-            formData.append('image', fileInput.files[0]);
+    // Tab Switching Logic
+    function switchTab(tabName) {
+      document.querySelectorAll('.tab-btn').forEach(btn => btn.classList.remove('active'));
+      document.querySelectorAll('.panel').forEach(panel => panel.classList.remove('active'));
 
-            try {
-                const response = await fetch(`${API_BASE}/process-3d`, {
-                    method: 'POST',
-                    body: formData
-                });
-
-                if (response.ok) {
-                    const data = await response.json();
-                    statusMessage.innerText = "Success! Check your Bot chat window.";
-                    tg.showAlert("Your phone running Termux successfully processed this file!");
-                } else {
-                    statusMessage.innerText = "Failed to communicate with phone tunnel.";
-                    generateBtn.disabled = false;
-                }
-            } catch (e) {
-                statusMessage.innerText = "Connection error. Make sure your Termux terminal is running.";
-                generateBtn.disabled = false;
-            }
-        }
-    </script>
+      if (tabName === 'app') {
+        document.querySelectorAll('.tab-btn')[0].classList.add('active');
+        document.getElementById('panel-app').classList.add('active');
+      } else {
+        document.querySelectorAll('.tab-btn')[1].classList.add('active');
+        document.getElementById('panel-code').classList.add('active');
+      }
+    }
+  </script>
 </body>
 </html>
