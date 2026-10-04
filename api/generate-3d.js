@@ -29,7 +29,7 @@ export default async function handler(req, res) {
       return res.status(500).json({ success: false, error: 'RUNPOD_API_KEY environment variable is missing on Vercel' });
     }
 
-    const runpodEndpoint = 'https://api.runpod.ai/v2/ix8w90ssxkdyfs/runsync';
+    const runpodEndpoint = 'https://api.runpod.ai/v2/1xRe90ssxkdytv/run';
 
     const response = await fetch(runpodEndpoint, {
       method: 'POST',
@@ -48,17 +48,21 @@ export default async function handler(req, res) {
 
     const data = await response.json();
 
-    if (data.status === 'COMPLETED' && data.output) {
-      const glbBase64 = data.output.glb || data.output.model || data.output;
-      return res.status(200).json({ success: true, glb: glbBase64 });
+    // Return the RunPod job ID and status immediately to avoid Vercel timeouts
+    if (data.id) {
+      return res.status(200).json({
+        success: true,
+        id: data.id,
+        status: data.status
+      });
     } else {
       return res.status(500).json({
         success: false,
-        error: data.error || data.status || 'GPU worker execution failed'
+        error: data.error || 'Failed to start asynchronous job on RunPod'
       });
     }
 
   } catch (err) {
     return res.status(500).json({ success: false, error: err.message });
   }
-}
+  }
