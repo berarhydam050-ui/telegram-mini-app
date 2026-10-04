@@ -47,9 +47,12 @@ export default async function handler(req, res) {
     });
 
     const data = await response.json();
+    
+    // Log the raw RunPod response to Vercel console for debugging
+    console.log("RunPod response status:", response.status);
+    console.log("RunPod raw response data:", JSON.stringify(data));
 
-    // Return the RunPod job ID and status immediately to avoid Vercel timeouts
-    if (data.id) {
+    if (response.ok && data.id) {
       return res.status(200).json({
         success: true,
         id: data.id,
@@ -58,11 +61,12 @@ export default async function handler(req, res) {
     } else {
       return res.status(500).json({
         success: false,
-        error: data.error || 'Failed to start asynchronous job on RunPod'
+        error: data.error || data.message || `RunPod rejected request with status ${response.status}`
       });
     }
 
   } catch (err) {
+    console.error("Handler error:", err);
     return res.status(500).json({ success: false, error: err.message });
   }
-  }
+}
