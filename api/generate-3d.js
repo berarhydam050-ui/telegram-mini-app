@@ -1,5 +1,5 @@
 export default async function handler(req, res) {
-  // CORS Headers
+  // Support CORS headers for Telegram Web App
   res.setHeader('Access-Control-Allow-Credentials', true);
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET,OPTIONS,PATCH,DELETE,POST,PUT');
@@ -14,47 +14,51 @@ export default async function handler(req, res) {
   }
 
   if (req.method !== 'POST') {
-    return res.status(405).json({ success: false, error: 'Method not allowed' });
-  }
-
-  const RUNPOD_API_KEY = process.env.RUNPOD_API_KEY;
-  const RUNPOD_ENDPOINT_ID = process.env.RUNPOD_ENDPOINT_ID || 'ix8w90ssxkdyfs';
-
-  if (!RUNPOD_API_KEY) {
-    return res.status(500).json({ success: false, error: 'RUNPOD_API_KEY is missing in environment variables.' });
+    return res.status(405).json({ success: false, error: 'Method Not Allowed' });
   }
 
   try {
-    const { image } = req.body;
+    const { image } = req.body || {};
 
     if (!image) {
-      return res.status(400).json({ success: false, error: 'No image provided' });
+      return res.status(400).json({ success: false, error: 'No image provided in request body' });
     }
 
-    const runpodResponse = await fetch(`https://api.runpod.ai/v2/${RUNPOD_ENDPOINT_ID}/runsync`, {
+    const apiKey = process.env.RUNPOD_API_KEY;
+    if (!apiKey) {
+      return res.status(500).json({ success: false, error: 'RUNPOD_API_KEY environment variable is missing on Vercel' });
+    }
+
+    const runpodEndpoint = 'https://api.runpod.ai/v2/ix8w90ssxkdyfs/runsync';
+
+    const response = await fetch(runpodEndpoint, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'Authorization': `Bearer ${RUNPOD_API_KEY}`
+        'Authorization': `Bearer ${apiKey}`
       },
-      body: JSON.stringify({ input: { image } })
+      body: JSON.stringify({
+        input: {
+          image: image,
+          texture_resolution: 1024,
+          remesh_option: 'none'
+        }
+      })
     });
 
-    const data = await runpodResponse.json();
+    const data = await response.json();
 
-    if (data.status === 'COMPLETED' && data.output?.model_mesh) {
-      return res.status(200).json({
-        success: true,
-        model_url: data.output.model_mesh
-      });
+    if (data.status === 'COMPLETED' && data.output) {
+      const glbBase64 = data.output.glb || data.output.model || data.output;
+      return res.status(200).json({ success: true, glb: glbBase64 });
     } else {
       return res.status(500).json({
         success: false,
-        error: data.output?.error || '3D mesh generation failed on GPU worker'
+        error: data.error || data.status || 'GPU worker execution failed'
       });
     }
+
   } catch (err) {
-    console.error('RunPod Error:', err);
-    return res.status(500).json({ success: false, error: 'Failed to connect to RunPod worker' });
+    return res.status(500).json({ success: false, error: err.message });
   }
-  }
+}
