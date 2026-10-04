@@ -321,7 +321,6 @@
     }
 
     async function launchCamera() {
-      // Step 1: Try getUserMedia with broad constraints to fix black screen
       if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
         try {
           cameraMediaStream = await navigator.mediaDevices.getUserMedia({
@@ -331,16 +330,14 @@
           const video = document.getElementById('cameraStream');
           video.srcObject = cameraMediaStream;
           
-          // Wait for stream video track to render
           await video.play();
           document.getElementById('cameraModal').style.display = 'flex';
           return;
         } catch (err) {
-          console.warn("Direct video stream blocked by Android WebView, falling back to system capture.", err);
+          console.warn("Direct video stream blocked, falling back to system capture.", err);
         }
       }
 
-      // Step 2: Native Android System File/Camera Fallback
       const nativeInput = document.getElementById('nativeCameraInput');
       nativeInput.value = '';
       nativeInput.click();
@@ -391,16 +388,16 @@
       genBtn.style.display = 'none';
       viewer.style.display = 'none';
       status.style.display = 'block';
-      status.innerHTML = "🚀 Uploading to RTX 4090 GPU...<br><span style='font-size:11px; color:#94a3b8;'>SF3D mesh extraction running (~5-10s)</span>";
+      status.innerHTML = "🚀 Queueing job on RunPod GPU...<br><span style='font-size:11px; color:#94a3b8;'>Waking up container (cold start)</span>";
 
       try {
         const reader = new FileReader();
         reader.readAsDataURL(selectedFileBlob);
         reader.onloadend = async () => {
           try {
-            // Strip Base64 header prefix before sending to avoid HTTP 400/500 errors
             const cleanBase64 = reader.result.replace(/^data:image\/\w+;base64,/, '');
 
+            // Step 1: Send request to async /run API endpoint
             const response = await fetch('/api/generate-3d', {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
@@ -409,20 +406,45 @@
 
             const result = await response.json();
 
-            if (result.success && (result.glb || result.model_url)) {
-              status.style.display = 'none';
-              
-              // Handle raw base64 GLB string or URL output
-              const glbSource = result.glb 
-                ? (result.glb.startsWith('data:') ? result.glb : `data:model/gltf-binary;base64,${result.glb}`) 
-                : result.model_url;
-
-              viewer.src = glbSource;
-              viewer.style.display = 'block';
-            } else {
-              status.innerText = "❌ " + (result.error || "Generation failed on GPU worker.");
+            if (!result.success || !result.id) {
+              status.innerText = "❌ " + (result.error || "Failed to queue job.");
               genBtn.style.display = 'inline-flex';
+              return;
             }
+
+            const jobId = result.id;
+            status.innerHTML = "⏳ GPU container booting & processing...<br><span style='font-size:11px; color:#94a3b8;'>Polling status every 3s...</span>";
+
+            // Step 2: Poll RunPod status API until COMPLETED
+            const pollInterval = setInterval(async () => {
+              try {
+                const statusRes = await fetch(`https://api.runpod.ai/v2/1xRe90ssxkdytv/status/${jobId}`, {
+                  headers: {
+                    'Authorization': `Bearer rpa_YOUR_RUNPOD_API_KEY` // Replace with your actual key or route via Vercel status proxy if desired
+                  }
+                });
+                const statusData = await statusRes.json();
+
+                if (statusData.status === 'COMPLETED') {
+                  clearInterval(pollInterval);
+                  status.style.display = 'none';
+
+                  const outputData = statusData.output;
+                  const glbBase64 = outputData.glb || outputData.model || outputData;
+                  const glbSource = glbBase64.startsWith('data:') ? glbBase64 : `data:model/gltf-binary;base64,${glbBase64}`;
+
+                  viewer.src = glbSource;
+                  viewer.style.display = 'block';
+                } else if (statusData.status === 'FAILED') {
+                  clearInterval(pollInterval);
+                  status.innerText = "❌ Generation failed on GPU worker.";
+                  genBtn.style.display = 'inline-flex';
+                }
+              } catch (pollErr) {
+                console.error("Polling check error:", pollErr);
+              }
+            }, 3000);
+
           } catch (err) {
             status.innerText = "❌ Failed to parse response from server.";
             genBtn.style.display = 'inline-flex';
