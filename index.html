@@ -1,3 +1,4 @@
+
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -393,25 +394,33 @@
       status.style.display = 'block';
       status.innerHTML = "🚀 Uploading to RTX 4090 GPU...<br><span style='font-size:11px; color:#94a3b8;'>SF3D mesh extraction running (~5-10s)</span>";
 
-      const formData = new FormData();
-      formData.append('image', selectedFileBlob, 'upload.jpg');
-
       try {
-        const response = await fetch('/api/generate-3d', {
-          method: 'POST',
-          body: formData
-        });
+        // Convert Blob/File to Base64 to send to server.js
+        const reader = new FileReader();
+        reader.readAsDataURL(selectedFileBlob);
+        reader.onloadend = async () => {
+          try {
+            const response = await fetch('/api/generate-3d', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ image: reader.result })
+            });
 
-        const result = await response.json();
+            const result = await response.json();
 
-        if (result.success && result.model_url) {
-          status.style.display = 'none';
-          viewer.src = result.model_url;
-          viewer.style.display = 'block';
-        } else {
-          status.innerText = "❌ " + (result.error || "Generation failed on GPU worker.");
-          genBtn.style.display = 'inline-flex';
-        }
+            if (result.success && result.model_url) {
+              status.style.display = 'none';
+              viewer.src = result.model_url;
+              viewer.style.display = 'block';
+            } else {
+              status.innerText = "❌ " + (result.error || "Generation failed on GPU worker.");
+              genBtn.style.display = 'inline-flex';
+            }
+          } catch (err) {
+            status.innerText = "❌ Failed to parse response from server.";
+            genBtn.style.display = 'inline-flex';
+          }
+        };
       } catch (err) {
         status.innerText = "❌ Failed to reach backend server.";
         genBtn.style.display = 'inline-flex';
