@@ -1,4 +1,3 @@
-
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -395,22 +394,30 @@
       status.innerHTML = "🚀 Uploading to RTX 4090 GPU...<br><span style='font-size:11px; color:#94a3b8;'>SF3D mesh extraction running (~5-10s)</span>";
 
       try {
-        // Convert Blob/File to Base64 to send to server.js
         const reader = new FileReader();
         reader.readAsDataURL(selectedFileBlob);
         reader.onloadend = async () => {
           try {
+            // Strip Base64 header prefix before sending to avoid HTTP 400/500 errors
+            const cleanBase64 = reader.result.replace(/^data:image\/\w+;base64,/, '');
+
             const response = await fetch('/api/generate-3d', {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ image: reader.result })
+              body: JSON.stringify({ image: cleanBase64 })
             });
 
             const result = await response.json();
 
-            if (result.success && result.model_url) {
+            if (result.success && (result.glb || result.model_url)) {
               status.style.display = 'none';
-              viewer.src = result.model_url;
+              
+              // Handle raw base64 GLB string or URL output
+              const glbSource = result.glb 
+                ? (result.glb.startsWith('data:') ? result.glb : `data:model/gltf-binary;base64,${result.glb}`) 
+                : result.model_url;
+
+              viewer.src = glbSource;
               viewer.style.display = 'block';
             } else {
               status.innerText = "❌ " + (result.error || "Generation failed on GPU worker.");
