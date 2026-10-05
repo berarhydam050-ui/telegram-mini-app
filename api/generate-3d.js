@@ -21,15 +21,15 @@ export default async function handler(req, res) {
     // 3. Extract the inner data object if the body arrives pre-wrapped in "input"
     const input = body.input || body;
 
-    // 4. Corrected endpoint URL structure using proper variable interpolation
-    const url = `https://runpod.ai{endpointId}/run`;
+    // 4. Safe URL creation using simple string concatenation to avoid template errors
+    const url = "https://runpod.ai" + endpointId + "/run";
     console.log("Sending request to RunPod:", url);
 
     // 5. Fire request using Vercel's native fetch utility
     const response = await fetch(url, {
       method: "POST",
       headers: {
-        "Authorization": `Bearer ${apiKey}`,
+        "Authorization": "Bearer " + apiKey,
         "Content-Type": "application/json"
       },
       body: JSON.stringify({ input: input })
