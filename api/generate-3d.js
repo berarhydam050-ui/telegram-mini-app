@@ -1,126 +1,73 @@
 export default async function handler(req, res) {
-  // CORS
-  res.setHeader("Access-Control-Allow-Credentials", "true");
-  res.setHeader("Access-Control-Allow-Origin", "*");
-  res.setHeader(
-    "Access-Control-Allow-Methods",
-    "GET,OPTIONS,PATCH,DELETE,POST,PUT"
-  );
-  res.setHeader(
-    "Access-Control-Allow-Headers",
-    "X-CSRF-Token, X-Requested-With, Accept, Accept-Version, Content-Length, Content-MD5, Content-Type, Date, X-Api-Version"
-  );
-
-  // OPTIONS request
-  if (req.method === "OPTIONS") {
-    return res.status(200).end();
-  }
-
-  // Only POST
   if (req.method !== "POST") {
     return res.status(405).json({
-      success: false,
-      error: "Method Not Allowed"
+      error: "Method not allowed"
+    });
+  }
+
+  const endpointId = process.env.RUNPOD_ENDPOINT_ID;
+  const apiKey = process.env.RUNPOD_API_KEY;
+
+  if (!endpointId) {
+    return res.status(500).json({
+      error: "RUNPOD_ENDPOINT_ID is missing on Vercel"
+    });
+  }
+
+  if (!apiKey) {
+    return res.status(500).json({
+      error: "RUNPOD_API_KEY is missing on Vercel"
     });
   }
 
   try {
-    const { image } = req.body || {};
+    const body = req.body || {};
 
-    if (!image) {
-      return res.status(400).json({
-        success: false,
-        error: "No image provided in request body"
-      });
-    }
+    // Accept either:
+    // { prompt: "..." }
+    // OR
+    // { input: { prompt: "..." } }
+    const input = body.input || body;
 
-    // RunPod API key
-    const apiKey = process.env.RUNPOD_API_KEY;
-
-    if (!apiKey) {
-      return res.status(500).json({
-        success: false,
-        error: "RUNPOD_API_KEY environment variable is missing on Vercel"
-      });
-    }
-
-    // RunPod endpoint ID
-    const endpointId = process.env.RUNPOD_ENDPOINT_ID;
-
-    if (!endpointId) {
-      return res.status(500).json({
-        success: false,
-        error: "RUNPOD_ENDPOINT_ID environment variable is missing on Vercel"
-      });
-    }
-
-    // RunPod synchronous endpoint
-    const runpodEndpoint =
+    const url =
       `https://api.runpod.ai/v2/${endpointId}/runsync`;
 
-    console.log("Sending request to RunPod:", runpodEndpoint);
+    console.log("Sending request to RunPod:", url);
 
-    const response = await fetch(runpodEndpoint, {
+    const response = await fetch(url, {
       method: "POST",
-
       headers: {
-        "Content-Type": "application/json",
-        "Authorization": `Bearer ${apiKey}`
+        "Authorization": `Bearer ${apiKey}`,
+        "Content-Type": "application/json"
       },
-
       body: JSON.stringify({
-        input: {
-          image: image,
-          texture_resolution: 1024,
-          remesh_option: "none"
-        }
+        input: input
       })
     });
 
-    const data = await response.json();
+    const text = await response.text();
+
+    let data;
+
+    try {
+      data = JSON.parse(text);
+    } catch {
+      data = {
+        raw: text
+      };
+    }
 
     console.log("RunPod HTTP status:", response.status);
-    console.log(
-      "RunPod response:",
-      JSON.stringify(data)
-    );
+    console.log("RunPod response:", data);
 
-    // RunPod error
-    if (!response.ok) {
-      return res.status(response.status).json({
-        success: false,
-        error:
-          data.error ||
-          data.message ||
-          data.detail ||
-          `RunPod returned HTTP ${response.status}`,
-        details: data
-      });
-    }
-
-    // Check completed output
-    if (data.output) {
-      return res.status(200).json({
-        success: true,
-        id: data.id || null,
-        status: data.status || "COMPLETED",
-        output: data.output
-      });
-    }
-
-    // No output returned
-    return res.status(500).json({
-      success: false,
-      error: "RunPod returned successfully but no output was found",
-      details: data
-    });
+    return res.status(response.status).json(data);
 
   } catch (error) {
-    console.error("Handler Error:", error);
+    console.error("RunPod request error:", error);
 
     return res.status(500).json({
-      success: false,
-      error: error.message || "Internal server error"
+      error: "Failed to call RunPod",
+      details: error.message
     });
   }
 }
