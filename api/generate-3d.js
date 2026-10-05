@@ -30,7 +30,8 @@ export default async function handler(req, res) {
     }
 
     // Updated with your new RunPod Endpoint ID
-    const runpodEndpoint = 'https://api.runpod.ai/v2/6iz1l1u676vw6o/run';
+    const runpodEndpoint = 'https://api.runpod.ai/v2/5lz11u676w6o/runsync';
+    
 
     const response = await fetch(runpodEndpoint, {
       method: 'POST',
