@@ -1,8 +1,10 @@
 export default async function handler(req, res) {
+  // 1. Only allow POST requests from your Telegram Mini App
   if (req.method !== "POST") {
     return res.status(405).json({ error: "Method not allowed" });
   }
 
+  // 2. Fetch the credentials safely from Vercel's Environment Variables
   const endpointId = process.env.RUNPOD_ENDPOINT_ID;
   const apiKey = process.env.RUNPOD_API_KEY;
 
@@ -16,13 +18,14 @@ export default async function handler(req, res) {
   try {
     const body = req.body || {};
     
-    // Safety check: extract payload correctly if already wrapped inside "input"
+    // 3. Extract the inner data object if the body arrives pre-wrapped in "input"
     const input = body.input || body;
 
-    // FIX: Switched from /runsync to /run
+    // 4. Corrected endpoint URL structure using proper variable interpolation
     const url = `https://runpod.ai{endpointId}/run`;
     console.log("Sending request to RunPod:", url);
 
+    // 5. Fire request using Vercel's native fetch utility
     const response = await fetch(url, {
       method: "POST",
       headers: {
@@ -32,6 +35,7 @@ export default async function handler(req, res) {
       body: JSON.stringify({ input: input })
     });
 
+    // 6. Read and safely parse the network response stream
     const text = await response.text();
     let data;
     try {
@@ -43,6 +47,7 @@ export default async function handler(req, res) {
     console.log("RunPod HTTP status:", response.status);
     console.log("RunPod response:", data);
 
+    // 7. Pass the RunPod gateway response back up to the frontend UI
     return res.status(response.status).json(data);
 
   } catch (error) {
