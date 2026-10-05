@@ -1,5 +1,3 @@
-import fetch from "node-fetch";
-
 export default async function handler(req, res) {
   // CORS for Telegram Mini App
   res.setHeader("Access-Control-Allow-Credentials", "true");
@@ -27,6 +25,7 @@ export default async function handler(req, res) {
   }
 
   try {
+    // Get image from request
     const { image } = req.body || {};
 
     if (!image) {
@@ -36,7 +35,7 @@ export default async function handler(req, res) {
       });
     }
 
-    // RunPod API key from Vercel Environment Variables
+    // Get RunPod API key from Vercel Environment Variables
     const apiKey = process.env.RUNPOD_API_KEY;
 
     if (!apiKey) {
@@ -46,7 +45,7 @@ export default async function handler(req, res) {
       });
     }
 
-    // Your RunPod Serverless endpoint
+    // Get RunPod Endpoint ID from Vercel Environment Variables
     const endpointId = process.env.RUNPOD_ENDPOINT_ID;
 
     if (!endpointId) {
@@ -56,11 +55,13 @@ export default async function handler(req, res) {
       });
     }
 
+    // RunPod Serverless endpoint
     const runpodEndpoint =
       `https://api.runpod.ai/v2/${endpointId}/run`;
 
     console.log("Sending request to RunPod:", runpodEndpoint);
 
+    // Send generation request to RunPod
     const response = await fetch(runpodEndpoint, {
       method: "POST",
 
@@ -78,11 +79,16 @@ export default async function handler(req, res) {
       })
     });
 
+    // Read RunPod response
     const data = await response.json();
 
     console.log("RunPod HTTP status:", response.status);
-    console.log("RunPod response:", JSON.stringify(data));
+    console.log(
+      "RunPod response:",
+      JSON.stringify(data)
+    );
 
+    // RunPod rejected the request
     if (!response.ok) {
       return res.status(response.status).json({
         success: false,
@@ -94,10 +100,11 @@ export default async function handler(req, res) {
       });
     }
 
+    // Request successfully submitted
     return res.status(200).json({
       success: true,
-      id: data.id,
-      status: data.status,
+      id: data.id || null,
+      status: data.status || "IN_PROGRESS",
       message: "3D generation job submitted successfully"
     });
 
