@@ -31,8 +31,9 @@ export default async function handler(req, res) {
       return res.status(500).json({ success: false, error: 'RUNPOD_API_KEY environment variable is missing on Vercel' });
     }
 
-    // Updated with your current RunPod Endpoint ID
-    const runpodEndpoint = 'https://runpod.ai';
+    
+    const runpodEndpoint = 'https://runpod.ai;
+      
 
     const response = await fetch(runpodEndpoint, {
       method: 'POST',
