@@ -1,5 +1,5 @@
 export default async function handler(req, res) {
-  // CORS for Telegram Mini App
+  // CORS
   res.setHeader("Access-Control-Allow-Credentials", "true");
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader(
@@ -11,12 +11,12 @@ export default async function handler(req, res) {
     "X-CSRF-Token, X-Requested-With, Accept, Accept-Version, Content-Length, Content-MD5, Content-Type, Date, X-Api-Version"
   );
 
-  // Handle CORS preflight
+  // OPTIONS request
   if (req.method === "OPTIONS") {
     return res.status(200).end();
   }
 
-  // Only POST is allowed
+  // Only POST
   if (req.method !== "POST") {
     return res.status(405).json({
       success: false,
@@ -25,7 +25,6 @@ export default async function handler(req, res) {
   }
 
   try {
-    // Get image from request
     const { image } = req.body || {};
 
     if (!image) {
@@ -35,7 +34,7 @@ export default async function handler(req, res) {
       });
     }
 
-    // Get RunPod API key from Vercel Environment Variables
+    // RunPod API key
     const apiKey = process.env.RUNPOD_API_KEY;
 
     if (!apiKey) {
@@ -45,7 +44,7 @@ export default async function handler(req, res) {
       });
     }
 
-    // Get RunPod Endpoint ID from Vercel Environment Variables
+    // RunPod endpoint ID
     const endpointId = process.env.RUNPOD_ENDPOINT_ID;
 
     if (!endpointId) {
@@ -55,13 +54,12 @@ export default async function handler(req, res) {
       });
     }
 
-    // RunPod Serverless endpoint
+    // RunPod synchronous endpoint
     const runpodEndpoint =
-      `https://api.runpod.ai/v2/${endpointId}/run`;
+      `https://api.runpod.ai/v2/${endpointId}/runsync`;
 
     console.log("Sending request to RunPod:", runpodEndpoint);
 
-    // Send generation request to RunPod
     const response = await fetch(runpodEndpoint, {
       method: "POST",
 
@@ -79,7 +77,6 @@ export default async function handler(req, res) {
       })
     });
 
-    // Read RunPod response
     const data = await response.json();
 
     console.log("RunPod HTTP status:", response.status);
@@ -88,24 +85,34 @@ export default async function handler(req, res) {
       JSON.stringify(data)
     );
 
-    // RunPod rejected the request
+    // RunPod error
     if (!response.ok) {
       return res.status(response.status).json({
         success: false,
         error:
           data.error ||
           data.message ||
+          data.detail ||
           `RunPod returned HTTP ${response.status}`,
         details: data
       });
     }
 
-    // Request successfully submitted
-    return res.status(200).json({
-      success: true,
-      id: data.id || null,
-      status: data.status || "IN_PROGRESS",
-      message: "3D generation job submitted successfully"
+    // Check completed output
+    if (data.output) {
+      return res.status(200).json({
+        success: true,
+        id: data.id || null,
+        status: data.status || "COMPLETED",
+        output: data.output
+      });
+    }
+
+    // No output returned
+    return res.status(500).json({
+      success: false,
+      error: "RunPod returned successfully but no output was found",
+      details: data
     });
 
   } catch (error) {
