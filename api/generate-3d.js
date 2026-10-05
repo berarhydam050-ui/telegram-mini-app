@@ -1,77 +1,112 @@
-import fetch from 'node-fetch';
+import fetch from "node-fetch";
 
 export default async function handler(req, res) {
-  // Support CORS headers for Telegram Web App
-  res.setHeader('Access-Control-Allow-Credentials', 'true');
-  res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader('Access-Control-Allow-Methods', 'GET,OPTIONS,PATCH,DELETE,POST,PUT');
+  // CORS for Telegram Mini App
+  res.setHeader("Access-Control-Allow-Credentials", "true");
+  res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader(
-    'Access-Control-Allow-Headers',
-    'X-CSRF-Token, X-Requested-With, Accept, Accept-Version, Content-Length, Content-MD5, Content-Type, Date, X-Api-Version'
+    "Access-Control-Allow-Methods",
+    "GET,OPTIONS,PATCH,DELETE,POST,PUT"
+  );
+  res.setHeader(
+    "Access-Control-Allow-Headers",
+    "X-CSRF-Token, X-Requested-With, Accept, Accept-Version, Content-Length, Content-MD5, Content-Type, Date, X-Api-Version"
   );
 
-  if (req.method === 'OPTIONS') {
-    res.status(200).end();
-    return;
+  // Handle CORS preflight
+  if (req.method === "OPTIONS") {
+    return res.status(200).end();
   }
 
-  if (req.method !== 'POST') {
-    return res.status(405).json({ success: false, error: 'Method Not Allowed' });
+  // Only POST is allowed
+  if (req.method !== "POST") {
+    return res.status(405).json({
+      success: false,
+      error: "Method Not Allowed"
+    });
   }
 
   try {
     const { image } = req.body || {};
 
     if (!image) {
-      return res.status(400).json({ success: false, error: 'No image provided in request body' });
+      return res.status(400).json({
+        success: false,
+        error: "No image provided in request body"
+      });
     }
 
+    // RunPod API key from Vercel Environment Variables
     const apiKey = process.env.RUNPOD_API_KEY;
+
     if (!apiKey) {
-      return res.status(500).json({ success: false, error: 'RUNPOD_API_KEY environment variable is missing on Vercel' });
+      return res.status(500).json({
+        success: false,
+        error: "RUNPOD_API_KEY environment variable is missing on Vercel"
+      });
     }
 
-    
-    const runpodEndpoint = 'https://runpod.ai;
-      
+    // Your RunPod Serverless endpoint
+    const endpointId = process.env.RUNPOD_ENDPOINT_ID;
+
+    if (!endpointId) {
+      return res.status(500).json({
+        success: false,
+        error: "RUNPOD_ENDPOINT_ID environment variable is missing on Vercel"
+      });
+    }
+
+    const runpodEndpoint =
+      `https://api.runpod.ai/v2/${endpointId}/run`;
+
+    console.log("Sending request to RunPod:", runpodEndpoint);
 
     const response = await fetch(runpodEndpoint, {
-      method: 'POST',
+      method: "POST",
+
       headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${apiKey}`
+        "Content-Type": "application/json",
+        "Authorization": `Bearer ${apiKey}`
       },
+
       body: JSON.stringify({
         input: {
           image: image,
           texture_resolution: 1024,
-          remesh_option: 'none'
+          remesh_option: "none"
         }
       })
     });
 
     const data = await response.json();
 
-    // Log the raw RunPod response to Vercel console for debugging
-    console.log("RunPod response status:", response.status);
-    console.log("RunPod raw response data:", JSON.stringify(data));
+    console.log("RunPod HTTP status:", response.status);
+    console.log("RunPod response:", JSON.stringify(data));
 
-    if (response.ok && data.status !== 'error') {
-      return res.status(200).json({
-        success: true,
-        id: data.id,
-        status: data.status,
-        model_mesh: data.output ? data.output.model_mesh : null
-      });
-    } else {
-      return res.status(500).json({
+    if (!response.ok) {
+      return res.status(response.status).json({
         success: false,
-        error: data.error || data.message || `RunPod rejected request with status ${response.status}`
+        error:
+          data.error ||
+          data.message ||
+          `RunPod returned HTTP ${response.status}`,
+        details: data
       });
     }
 
+    return res.status(200).json({
+      success: true,
+      id: data.id,
+      status: data.status,
+      message: "3D generation job submitted successfully"
+    });
+
   } catch (error) {
     console.error("Handler Error:", error);
-    return res.status(500).json({ success: false, error: error.message });
+
+    return res.status(500).json({
+      success: false,
+      error: error.message || "Internal server error"
+    });
   }
 }
