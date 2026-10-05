@@ -1,6 +1,8 @@
+import fetch from 'node-fetch';
+
 export default async function handler(req, res) {
   // Support CORS headers for Telegram Web App
-  res.setHeader('Access-Control-Allow-Credentials', true);
+  res.setHeader('Access-Control-Allow-Credentials', 'true');
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET,OPTIONS,PATCH,DELETE,POST,PUT');
   res.setHeader(
@@ -29,9 +31,8 @@ export default async function handler(req, res) {
       return res.status(500).json({ success: false, error: 'RUNPOD_API_KEY environment variable is missing on Vercel' });
     }
 
-    // Updated with your new RunPod Endpoint ID
-    const runpodEndpoint = 'https://api.runpod.ai/v2/5lz11u676w6o/runsync';
-    
+    // Updated with your current RunPod Endpoint ID
+    const runpodEndpoint = 'https://runpod.ai';
 
     const response = await fetch(runpodEndpoint, {
       method: 'POST',
@@ -49,16 +50,17 @@ export default async function handler(req, res) {
     });
 
     const data = await response.json();
-    
+
     // Log the raw RunPod response to Vercel console for debugging
     console.log("RunPod response status:", response.status);
     console.log("RunPod raw response data:", JSON.stringify(data));
 
-    if (response.ok && data.id) {
+    if (response.ok && data.status !== 'error') {
       return res.status(200).json({
         success: true,
         id: data.id,
-        status: data.status
+        status: data.status,
+        model_mesh: data.output ? data.output.model_mesh : null
       });
     } else {
       return res.status(500).json({
@@ -67,8 +69,8 @@ export default async function handler(req, res) {
       });
     }
 
-  } catch (err) {
-    console.error("Handler error:", err);
-    return res.status(500).json({ success: false, error: err.message });
+  } catch (error) {
+    console.error("Handler Error:", error);
+    return res.status(500).json({ success: false, error: error.message });
   }
 }
