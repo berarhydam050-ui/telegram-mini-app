@@ -201,7 +201,6 @@
       display: none;
     }
 
-    /* Live Camera Modal Viewport */
     .camera-modal {
       display: none;
       position: fixed;
@@ -395,13 +394,13 @@
         reader.readAsDataURL(selectedFileBlob);
         reader.onloadend = async () => {
           try {
-            const cleanBase64 = reader.result.replace(/^data:image\/\w+;base64,/, '');
+            const fullBase64 = reader.result;
 
-            // Step 1: Send request to async /run API endpoint
+            // Step 1: Submit job to backend Vercel handler
             const response = await fetch('/api/generate-3d', {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ image: cleanBase64 })
+              body: JSON.stringify({ image: fullBase64 })
             });
 
             const result = await response.json();
@@ -413,27 +412,34 @@
             }
 
             const jobId = result.id;
-            status.innerHTML = "⏳ GPU container booting & processing...<br><span style='font-size:11px; color:#94a3b8;'>Polling status every 3s...</span>";
+            status.innerHTML = "⏳ GPU container booted & processing...<br><span style='font-size:11px; color:#94a3b8;'>Polling status every 3s...</span>";
 
-            // Step 2: Poll RunPod status API until COMPLETED
+            // Step 2: Poll status check route securely via Vercel proxy
             const pollInterval = setInterval(async () => {
               try {
-                const statusRes = await fetch(`https://api.runpod.ai/v2/1xRe90ssxkdytv/status/${jobId}`, {
-                  headers: {
-                    'Authorization': `Bearer rpa_YOUR_RUNPOD_API_KEY` // Replace with your actual key or route via Vercel status proxy if desired
-                  }
+                const statusRes = await fetch('/api/check-status', {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ jobId })
                 });
+
                 const statusData = await statusRes.json();
 
                 if (statusData.status === 'COMPLETED') {
                   clearInterval(pollInterval);
                   status.style.display = 'none';
 
-                  const outputData = statusData.output;
-                  const glbBase64 = outputData.glb || outputData.model || outputData;
-                  const glbSource = glbBase64.startsWith('data:') ? glbBase64 : `data:model/gltf-binary;base64,${glbBase64}`;
+                  const output = statusData.output;
+                  let glbUrl = "";
 
-                  viewer.src = glbSource;
+                  if (typeof output === 'string') {
+                    glbUrl = output.startsWith('http') ? output : `data:model/gltf-binary;base64,${output}`;
+                  } else if (output && typeof output === 'object') {
+                    const val = output.glb || output.model || output.url || Object.values(output)[0];
+                    glbUrl = (typeof val === 'string' && val.startsWith('http')) ? val : `data:model/gltf-binary;base64,${val}`;
+                  }
+
+                  viewer.src = glbUrl;
                   viewer.style.display = 'block';
                 } else if (statusData.status === 'FAILED') {
                   clearInterval(pollInterval);
