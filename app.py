@@ -1,10 +1,10 @@
 import base64
 import io
+import os
 import modal
 
-def download_hf_weights():
-    from huggingface_hub import snapshot_download
-    snapshot_download(repo_id="stabilityai/stable-fast-3d")
+cache_volume = modal.Volume.from_name("sf3d-weights-cache", create_if_missing=True)
+CACHE_DIR = "/root/.cache/huggingface"
 
 sf3d_image = (
     modal.Image.debian_slim(python_version="3.10")
@@ -15,7 +15,6 @@ sf3d_image = (
         "git clone https://github.com/stability-ai/stable-fast-3d /app/stable_fast_3d",
         "cd /app/stable_fast_3d && pip install -r requirements.txt"
     )
-    .run_function(download_hf_weights)
 )
 
 app = modal.App("sf3d-backend")
@@ -23,7 +22,9 @@ app = modal.App("sf3d-backend")
 @app.cls(
     image=sf3d_image,
     gpu="A10G",
-    scaledown_window=60
+    volumes={CACHE_DIR: cache_volume},
+    scaledown_window=60,
+    secrets=[modal.Secret.from_name("huggingface-secret", create_if_missing=True)]
 )
 class SF3DModel:
     @modal.enter()
@@ -33,9 +34,12 @@ class SF3DModel:
         import torch
         from sf3d.pipeline import StableFast3DPipeline
 
+        os.environ["HF_HOME"] = CACHE_DIR
         self.pipeline = StableFast3DPipeline.from_pretrained(
             "stabilityai/stable-fast-3d",
-            torch_dtype=torch.float16
+            torch_dtype=torch.float16,
+            cache_dir=CACHE_DIR,
+            token=os.environ.get("HF_TOKEN")
         ).to("cuda")
 
     @modal.fastapi_endpoint(method="POST")
