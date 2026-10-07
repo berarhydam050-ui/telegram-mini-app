@@ -24,7 +24,7 @@ app = modal.App("sf3d-backend")
     gpu="A10G",
     volumes={CACHE_DIR: cache_volume},
     scaledown_window=60,
-    secrets=[modal.Secret.from_name("huggingface-secret", create_if_missing=True)]
+    secrets=[modal.Secret.from_name("huggingface-secret")]
 )
 class SF3DModel:
     @modal.enter()
