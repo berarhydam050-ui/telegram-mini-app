@@ -37,7 +37,5 @@ class SF3DModel:
 
         os.environ["HF_HOME"] = CACHE_DIR
         
-        print("Loading Stable Fast 3D into GPU memory...")
-        self.pipeline = StableFast3DPipeline.from_pretrained(
-            "stabilityai/stable-fast-
+        print("Loading Stable Fast 3D into GPU memory
         
