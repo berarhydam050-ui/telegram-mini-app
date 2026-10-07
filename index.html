@@ -1,466 +1,59 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-  <title>SF3D Studio</title>
+import base64
+import io
+import os
+import modal
 
-  <!-- Telegram WebApp SDK -->
-  <script src="https://telegram.org/js/telegram-web-app.js"></script>
-  <!-- Google Model Viewer for GLB 3D Preview -->
-  <script type="module" src="https://ajax.googleapis.com/ajax/libs/model-viewer/3.4.0/model-viewer.min.js"></script>
+cache_volume = modal.Volume.from_name("sf3d-weights-cache", create_if_missing=True)
+CACHE_DIR = "/root/.cache/huggingface"
 
-  <script>
-    if (window.Telegram && window.Telegram.WebApp) {
-      window.Telegram.WebApp.ready();
-      window.Telegram.WebApp.expand();
-    }
-  </script>
+sf3d_image = (
+    modal.Image.debian_slim(python_version="3.10")
+    .apt_install("git", "wget", "unzip", "libgl1-mesa-glx", "libglib2.0-0")
+    .pip_install(
+        "torch", "torchvision", index_url="https://download.pytorch.org/whl/cu121"
+    )
+    .pip_install("rembg", "pillow", "trimesh", "accelerate", "transformers", "diffusers", "einops")
+    .run_commands(
+        "git clone https://github.com/stability-ai/stable-fast-3d /app/stable_fast_3d",
+        "pip install -r /app/stable_fast_3d/requirements.txt"
+    )
+)
 
-  <style>
-    :root {
-      --bg-dark: #0b0e14;
-      --card-bg: #121824;
-      --card-border: #1e293b;
-      --accent-purple: #6366f1;
-      --text-main: #f8fafc;
-      --text-muted: #94a3b8;
-    }
+app = modal.App("sf3d-backend")
 
-    * {
-      box-sizing: border-box;
-      margin: 0;
-      padding: 0;
-      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-      -webkit-tap-highlight-color: transparent;
-    }
+@app.cls(
+    image=sf3d_image,
+    gpu="A10G",
+    volumes={CACHE_DIR: cache_volume},
+    scaledown_window=60
+)
+class SF3DModel:
+    @modal.enter()
+    def setup(self):
+        import sys
+        sys.path.append("/app/stable_fast_3d")
+        import torch
+        from sf3d.pipeline import StableFast3DPipeline
 
-    body {
-      background-color: var(--bg-dark);
-      color: var(--text-main);
-      padding: 12px;
-      display: flex;
-      justify-content: center;
-    }
+        os.environ["HF_HOME"] = CACHE_DIR
+        
+        print("Loading Stable Fast 3D into GPU memory...")
+        self.pipeline = StableFast3DPipeline.from_pretrained(
+            "stabilityai/stable-fast-3d",
+            torch_dtype=torch.float16,
+            cache_dir=CACHE_DIR
+        ).to("cuda")
+        print("Model loaded successfully.")
 
-    .app-container {
-      width: 100%;
-      max-width: 480px;
-      display: flex;
-      flex-direction: column;
-      gap: 14px;
-    }
+    @modal.web_endpoint(method="POST")
+    def generate(self, data: dict):
+        import sys
+        sys.path.append("/app/stable_fast_3d")
+        import torch
+        from PIL import Image
+        from rembg import remove
+        from sf3d.utils import save_glb
 
-    .header-card {
-      background: var(--card-bg);
-      border: 1px solid var(--card-border);
-      border-radius: 16px;
-      padding: 14px;
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-    }
-
-    .brand {
-      display: flex;
-      align-items: center;
-      gap: 12px;
-    }
-
-    .brand-icon {
-      width: 44px;
-      height: 44px;
-      background: linear-gradient(135deg, #a855f7, #6366f1);
-      border-radius: 12px;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      font-size: 22px;
-    }
-
-    .brand-title {
-      font-size: 18px;
-      font-weight: 700;
-    }
-
-    .brand-badge {
-      font-size: 10px;
-      background: #1e1b4b;
-      color: #818cf8;
-      padding: 3px 8px;
-      border-radius: 20px;
-      border: 1px solid #312e81;
-      display: inline-block;
-    }
-
-    .content-card {
-      background: var(--card-bg);
-      border: 1px solid var(--card-border);
-      border-radius: 16px;
-      padding: 16px;
-    }
-
-    .card-title-row {
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-      margin-bottom: 12px;
-    }
-
-    .card-title {
-      font-size: 13px;
-      font-weight: 700;
-      letter-spacing: 0.5px;
-      display: flex;
-      align-items: center;
-      gap: 8px;
-      text-transform: uppercase;
-    }
-
-    .upload-box {
-      border: 2px dashed #334155;
-      border-radius: 12px;
-      padding: 20px 16px;
-      text-align: center;
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-      gap: 12px;
-      background: rgba(15, 23, 42, 0.4);
-    }
-
-    .upload-icon {
-      width: 56px;
-      height: 56px;
-      background: rgba(99, 102, 241, 0.15);
-      color: var(--accent-purple);
-      border-radius: 50%;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      font-size: 24px;
-      overflow: hidden;
-    }
-
-    .preview-img {
-      width: 100%;
-      height: 100%;
-      object-fit: cover;
-      display: none;
-    }
-
-    .button-group {
-      display: flex;
-      gap: 10px;
-      width: 100%;
-      margin-top: 8px;
-    }
-
-    .action-btn {
-      flex: 1;
-      padding: 12px;
-      border-radius: 10px;
-      border: 1px solid #334155;
-      background: #1e293b;
-      color: white;
-      font-size: 13px;
-      font-weight: 600;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      gap: 6px;
-      cursor: pointer;
-    }
-
-    .action-btn.primary {
-      background: var(--accent-purple);
-      border-color: var(--accent-purple);
-    }
-
-    .canvas-viewport {
-      width: 100%;
-      height: 260px;
-      background: #070a0f;
-      border-radius: 12px;
-      border: 1px solid var(--card-border);
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-      justify-content: center;
-      color: var(--text-muted);
-      font-size: 13px;
-      padding: 16px;
-      text-align: center;
-      position: relative;
-    }
-
-    model-viewer {
-      width: 100%;
-      height: 100%;
-      background-color: transparent;
-      display: none;
-    }
-
-    .camera-modal {
-      display: none;
-      position: fixed;
-      inset: 0;
-      background: #000;
-      z-index: 9999;
-      flex-direction: column;
-      align-items: center;
-      justify-content: space-between;
-      padding: 20px;
-    }
-
-    .camera-video {
-      width: 100%;
-      height: 70vh;
-      object-fit: cover;
-      border-radius: 16px;
-      background: #111;
-    }
-
-    .camera-controls {
-      display: flex;
-      gap: 16px;
-      width: 100%;
-      max-width: 400px;
-      margin-bottom: 20px;
-    }
-
-    #galleryInput, #nativeCameraInput {
-      display: none;
-    }
-  </style>
-</head>
-<body>
-
-  <!-- Native Hidden Inputs -->
-  <input type="file" id="galleryInput" accept="image/*">
-  <input type="file" id="nativeCameraInput" accept="image/*" capture="environment">
-
-  <!-- HTML Canvas Fallback Camera Modal -->
-  <div class="camera-modal" id="cameraModal">
-    <video id="cameraStream" autoplay playsinline muted class="camera-video"></video>
-    <div class="camera-controls">
-      <button class="action-btn" type="button" onclick="closeCameraModal()">❌ Cancel</button>
-      <button class="action-btn primary" type="button" onclick="takePhoto()">📸 Capture Photo</button>
-    </div>
-    <canvas id="snapshotCanvas" style="display:none;"></canvas>
-  </div>
-
-  <div class="app-container">
-    <div class="header-card">
-      <div class="brand">
-        <div class="brand-icon">📦</div>
-        <div>
-          <div class="brand-title">SF3D Studio</div>
-          <span class="brand-badge">AI 3D Generator</span>
-        </div>
-      </div>
-    </div>
-
-    <div class="content-card">
-      <div class="card-title-row">
-        <div class="card-title">📷 Select Image</div>
-      </div>
-
-      <div class="upload-box">
-        <div class="upload-icon">
-          <span id="iconEmoji">☁️</span>
-          <img id="previewImg" class="preview-img" alt="Preview">
-        </div>
-        <div class="upload-heading" id="uploadHeading">Upload or Take Photo</div>
-        <div style="font-size: 11px; color: var(--text-muted);" id="uploadSubtext">Single subject with clear lighting works best</div>
-
-        <div class="button-group">
-          <button class="action-btn" type="button" onclick="openGallery()">📁 Gallery</button>
-          <button class="action-btn primary" type="button" onclick="launchCamera()">📷 Take Photo</button>
-        </div>
-      </div>
-    </div>
-
-    <div class="content-card">
-      <div class="card-title-row">
-        <div class="card-title">🟢 3D MODEL VIEWPORT</div>
-      </div>
-      
-      <div class="canvas-viewport" id="canvasViewport">
-        <p id="canvasStatus">Upload an image to start 3D generation</p>
-        <model-viewer id="3dViewer" camera-controls auto-rotate shadow-intensity="1"></model-viewer>
-        <button class="action-btn primary" id="generateBtn" style="display:none; max-width: 220px; margin-top: 12px;" onclick="generate3DModel()">⚡ Generate 3D Model</button>
-      </div>
-    </div>
-  </div>
-
-  <script>
-    let selectedFileBlob = null;
-    let cameraMediaStream = null;
-
-    function openGallery() {
-      const galleryInput = document.getElementById('galleryInput');
-      galleryInput.value = '';
-      galleryInput.click();
-    }
-
-    document.getElementById('galleryInput').addEventListener('change', handleFileSelected);
-    document.getElementById('nativeCameraInput').addEventListener('change', handleFileSelected);
-
-    function handleFileSelected(e) {
-      const file = e.target.files[0];
-      if (file) {
-        selectedFileBlob = file;
-        const reader = new FileReader();
-        reader.onload = (event) => {
-          showPreview(event.target.result, file.name || "Captured Photo");
-        };
-        reader.readAsDataURL(file);
-      }
-    }
-
-    async function launchCamera() {
-      if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
-        try {
-          cameraMediaStream = await navigator.mediaDevices.getUserMedia({
-            video: { facingMode: "environment" },
-            audio: false
-          });
-          const video = document.getElementById('cameraStream');
-          video.srcObject = cameraMediaStream;
-          
-          await video.play();
-          document.getElementById('cameraModal').style.display = 'flex';
-          return;
-        } catch (err) {
-          console.warn("Direct video stream blocked, falling back to system capture.", err);
-        }
-      }
-
-      const nativeInput = document.getElementById('nativeCameraInput');
-      nativeInput.value = '';
-      nativeInput.click();
-    }
-
-    function takePhoto() {
-      const video = document.getElementById('cameraStream');
-      const canvas = document.getElementById('snapshotCanvas');
-      
-      canvas.width = video.videoWidth || 640;
-      canvas.height = video.videoHeight || 480;
-
-      const ctx = canvas.getContext('2d');
-      ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-
-      canvas.toBlob((blob) => {
-        selectedFileBlob = blob;
-        const dataUrl = canvas.toDataURL('image/jpeg');
-        showPreview(dataUrl, "Captured Photo.jpg");
-        closeCameraModal();
-      }, 'image/jpeg', 0.95);
-    }
-
-    function closeCameraModal() {
-      if (cameraMediaStream) {
-        cameraMediaStream.getTracks().forEach(track => track.stop());
-        cameraMediaStream = null;
-      }
-      document.getElementById('cameraModal').style.display = 'none';
-    }
-
-    function showPreview(src, title) {
-      document.getElementById('previewImg').src = src;
-      document.getElementById('previewImg').style.display = 'block';
-      document.getElementById('iconEmoji').style.display = 'none';
-      document.getElementById('uploadHeading').innerText = "Image Selected";
-      document.getElementById('uploadSubtext').innerText = title;
-      document.getElementById('generateBtn').style.display = 'inline-flex';
-    }
-
-    async function generate3DModel() {
-      if (!selectedFileBlob) return;
-
-      const status = document.getElementById('canvasStatus');
-      const genBtn = document.getElementById('generateBtn');
-      const viewer = document.getElementById('3dViewer');
-
-      genBtn.style.display = 'none';
-      viewer.style.display = 'none';
-      status.style.display = 'block';
-      status.innerHTML = "🚀 Queueing job on RunPod GPU...<br><span style='font-size:11px; color:#94a3b8;'>Waking up container (cold start)</span>";
-
-      try {
-        const reader = new FileReader();
-        reader.readAsDataURL(selectedFileBlob);
-        reader.onloadend = async () => {
-          try {
-            const fullBase64 = reader.result;
-
-            // Step 1: Submit job to backend Vercel handler
-            const response = await fetch('/api/generate-3d', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ image: fullBase64 })
-            });
-
-            const result = await response.json();
-
-            if (!result.success || !result.id) {
-              status.innerText = "❌ " + (result.error || "Failed to queue job.");
-              genBtn.style.display = 'inline-flex';
-              return;
-            }
-
-            const jobId = result.id;
-            status.innerHTML = "⏳ GPU container booted & processing...<br><span style='font-size:11px; color:#94a3b8;'>Polling status every 3s...</span>";
-
-            // Step 2: Poll status check route securely via Vercel proxy
-            const pollInterval = setInterval(async () => {
-              try {
-                const statusRes = await fetch('/api/check-status', {
-                  method: 'POST',
-                  headers: { 'Content-Type': 'application/json' },
-                  body: JSON.stringify({ jobId })
-                });
-
-                const statusData = await statusRes.json();
-
-                if (statusData.status === 'COMPLETED') {
-                  clearInterval(pollInterval);
-                  status.style.display = 'none';
-
-                  const output = statusData.output;
-                  let glbUrl = "";
-
-                  if (typeof output === 'string') {
-                    glbUrl = output.startsWith('http') ? output : `data:model/gltf-binary;base64,${output}`;
-                  } else if (output && typeof output === 'object') {
-                    const val = output.glb || output.model || output.url || Object.values(output)[0];
-                    glbUrl = (typeof val === 'string' && val.startsWith('http')) ? val : `data:model/gltf-binary;base64,${val}`;
-                  }
-
-                  viewer.src = glbUrl;
-                  viewer.style.display = 'block';
-                } else if (statusData.status === 'FAILED') {
-                  clearInterval(pollInterval);
-                  status.innerText = "❌ Generation failed on GPU worker.";
-                  genBtn.style.display = 'inline-flex';
-                }
-              } catch (pollErr) {
-                console.error("Polling check error:", pollErr);
-              }
-            }, 3000);
-
-          } catch (err) {
-            status.innerText = "❌ Failed to parse response from server.";
-            genBtn.style.display = 'inline-flex';
-          }
-        };
-      } catch (err) {
-        status.innerText = "❌ Failed to reach backend server.";
-        genBtn.style.display = 'inline-flex';
-      }
-    }
-  </script>
-</body>
-</html>
+        try:
+            base64_img = data.
+            
