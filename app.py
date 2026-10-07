@@ -25,7 +25,7 @@ app = modal.App("sf3d-backend")
     image=sf3d_image,
     gpu="A10G",
     volumes={CACHE_DIR: cache_volume},
-    container_idle_timeout=60
+    scaledown_window=60
 )
 class SF3DModel:
     @modal.enter()
@@ -39,44 +39,5 @@ class SF3DModel:
         
         print("Loading Stable Fast 3D into GPU memory...")
         self.pipeline = StableFast3DPipeline.from_pretrained(
-            "stabilityai/stable-fast-3d",
-            torch_dtype=torch.float16,
-            cache_dir=CACHE_DIR
-        ).to("cuda")
-        print("Model loaded successfully.")
-
-    @modal.web_endpoint(method="POST")
-    def generate(self, data: dict):
-        import sys
-        sys.path.append("/app/stable_fast_3d")
-        import torch
-        from PIL import Image
-        from rembg import remove
-        from sf3d.utils import save_glb
-
-        try:
-            base64_img = data.get("image")
-            if not base64_img:
-                return {"status": "error", "message": "Missing 'image' parameter"}
-
-            if "," in base64_img:
-                base64_img = base64_img.split(",")[1]
-
-            image_bytes = base64.b64decode(base64_img)
-            input_image = Image.open(io.BytesIO(image_bytes)).convert("RGB")
-
-            clean_image = remove(input_image)
-
-            with torch.inference_mode():
-                outputs = self.pipeline(clean_image, input_processing=True)
-
-            glb_buffer = io.BytesIO()
-            save_glb(glb_buffer, outputs)
-            glb_buffer.seek(0)
-
-            encoded_glb = base64.b64encode(glb_buffer.read()).decode("utf-8")
-            return {"status": "success", "model": encoded_glb}
-
-        except Exception as e:
-            return {"status": "error", "message": str(e)}
-          
+            "stabilityai/stable-fast-
+        
