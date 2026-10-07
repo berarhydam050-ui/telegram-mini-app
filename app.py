@@ -9,9 +9,7 @@ CACHE_DIR = "/root/.cache/huggingface"
 sf3d_image = (
     modal.Image.debian_slim(python_version="3.10")
     .apt_install("git", "wget", "unzip", "libgl1-mesa-glx", "libglib2.0-0")
-    .pip_install(
-        "torch", "torchvision", index_url="https://download.pytorch.org/whl/cu121"
-    )
+    .pip_install("torch", "torchvision", index_url="https://download.pytorch.org/whl/cu121")
     .pip_install("rembg", "pillow", "trimesh", "accelerate", "transformers", "diffusers", "einops")
     .run_commands(
         "git clone https://github.com/stability-ai/stable-fast-3d /app/stable_fast_3d",
@@ -36,6 +34,43 @@ class SF3DModel:
         from sf3d.pipeline import StableFast3DPipeline
 
         os.environ["HF_HOME"] = CACHE_DIR
-        
-        print("Loading Stable Fast 3D into GPU memory
-        
+        self.pipeline = StableFast3DPipeline.from_pretrained(
+            "stabilityai/stable-fast-3d",
+            torch_dtype=torch.float16,
+            cache_dir=CACHE_DIR
+        ).to("cuda")
+
+    @modal.web_endpoint(method="POST")
+    def generate(self, data: dict):
+        import sys
+        sys.path.append("/app/stable_fast_3d")
+        import torch
+        from PIL import Image
+        from rembg import remove
+        from sf3d.utils import save_glb
+
+        try:
+            img_str = data.get("image")
+            if not img_str:
+                return {"status": "error", "message": "Missing image"}
+
+            if "," in img_str:
+                img_str = img_str.split(",")[1]
+
+            img_bytes = base64.b64decode(img_str)
+            img = Image.open(io.BytesIO(img_bytes)).convert("RGB")
+            clean_img = remove(img)
+
+            with torch.inference_mode():
+                out = self.pipeline(clean_img, input_processing=True)
+
+            buf = io.BytesIO()
+            save_glb(buf, out)
+            buf.seek(0)
+
+            b64_out = base64.b64encode(buf.read()).decode("utf-8")
+            return {"status": "success", "model": b64_out}
+
+        except Exception as e:
+            return {"status": "error", "message": str(e)}
+            
