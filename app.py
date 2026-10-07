@@ -2,12 +2,10 @@ import base64
 import io
 import modal
 
-# 1. Function that downloads weights from Hugging Face during Modal image build
 def download_hf_weights():
     from huggingface_hub import snapshot_download
     snapshot_download(repo_id="stabilityai/stable-fast-3d")
 
-# 2. Build the image layer by layer and bake the HF weights inside
 sf3d_image = (
     modal.Image.debian_slim(python_version="3.10")
     .apt_install("git", "wget", "unzip", "libgl1-mesa-glx", "libglib2.0-0")
@@ -15,9 +13,9 @@ sf3d_image = (
     .pip_install("rembg", "pillow", "trimesh", "accelerate", "transformers", "diffusers", "einops", "huggingface_hub")
     .run_commands(
         "git clone https://github.com/stability-ai/stable-fast-3d /app/stable_fast_3d",
-        "pip install -r /app/stable_fast_3d/requirements.txt"
+        "cd /app/stable_fast_3d && pip install -r requirements.txt"
     )
-    .run_function(download_hf_weights)  # <--- Bakes model into Modal image
+    .run_function(download_hf_weights)
 )
 
 app = modal.App("sf3d-backend")
@@ -30,7 +28,6 @@ app = modal.App("sf3d-backend")
 class SF3DModel:
     @modal.enter()
     def setup(self):
-        """Loads pre-baked weights directly from local image storage to VRAM."""
         import sys
         sys.path.append("/app/stable_fast_3d")
         import torch
