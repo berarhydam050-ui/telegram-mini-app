@@ -19,7 +19,8 @@ export default async function handler(req, res) {
 
   const endpointId = rawEndpointId.replace('Endpoint_ID', '').trim();
   const apiKey = rawApiKey.trim();
-  const { jobId } = req.body || {};
+
+  const jobId = req.body.jobId || req.body;
 
   if (!jobId) {
     return res.status(400).json({ success: false, error: 'Missing jobId in request body' });
