@@ -34,6 +34,7 @@ app = modal.App("sf3d-backend")
     gpu="A10G",
     volumes={CACHE_DIR: cache_volume},
     scaledown_window=60,
+    timeout=120,
     secrets=[modal.Secret.from_name("huggingface-secret")]
 )
 class SF3DModel:
@@ -77,7 +78,10 @@ class SF3DModel:
 
         return base64.b64encode(buf.read()).decode("utf-8")
 
-@app.function(image=sf3d_image)
+@app.function(
+    image=sf3d_image,
+    timeout=120
+)
 @modal.asgi_app()
 def api():
     from fastapi import FastAPI
@@ -101,7 +105,7 @@ def api():
                 return {"status": "error", "message": "Missing image"}
 
             model = SF3DModel()
-            b64_out = model.generate_mesh.remote(img_str)
+            b64_out = await model.generate_mesh.remote.aio(img_str)
             return {"status": "success", "model": b64_out}
         except Exception as e:
             return {"status": "error", "message": str(e)}
