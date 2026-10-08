@@ -10,7 +10,17 @@ sf3d_image = (
     modal.Image.debian_slim(python_version="3.10")
     .apt_install("git", "wget", "unzip", "libgl1-mesa-glx", "libglib2.0-0")
     .pip_install("torch", "torchvision", index_url="https://download.pytorch.org/whl/cu121")
-    .pip_install("rembg", "pillow", "trimesh", "accelerate", "transformers", "diffusers", "einops", "huggingface_hub")
+    .pip_install(
+        "rembg",
+        "pillow",
+        "trimesh",
+        "accelerate",
+        "transformers",
+        "diffusers",
+        "einops",
+        "huggingface_hub",
+        "fastapi[standard]"
+    )
     .run_commands(
         "git clone https://github.com/stability-ai/stable-fast-3d /app/stable_fast_3d",
         "cd /app/stable_fast_3d && pip install -r requirements.txt"
