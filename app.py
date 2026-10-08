@@ -2,8 +2,6 @@ import base64
 import io
 import os
 import modal
-from fastapi import FastAPI
-from fastapi.middleware.cors import CORSMiddleware
 
 cache_volume = modal.Volume.from_name("sf3d-weights-cache", create_if_missing=True)
 CACHE_DIR = "/root/.cache/huggingface"
@@ -30,16 +28,6 @@ sf3d_image = (
 )
 
 app = modal.App("sf3d-backend")
-web_app = FastAPI()
-
-# Enable CORS for browser / Telegram WebApp preflight requests
-web_app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
 
 @app.cls(
     image=sf3d_image,
@@ -89,21 +77,34 @@ class SF3DModel:
 
         return base64.b64encode(buf.read()).decode("utf-8")
 
-@web_app.post("/generate")
-async def generate_endpoint(data: dict):
-    try:
-        img_str = data.get("image")
-        if not img_str:
-            return {"status": "error", "message": "Missing image"}
-
-        model = SF3DModel()
-        b64_out = model.generate_mesh.remote(img_str)
-        return {"status": "success", "model": b64_out}
-    except Exception as e:
-        return {"status": "error", "message": str(e)}
-
 @app.function(image=sf3d_image)
 @modal.asgi_app()
 def api():
+    from fastapi import FastAPI
+    from fastapi.middleware.cors import CORSMiddleware
+
+    web_app = FastAPI()
+
+    web_app.add_middleware(
+        CORSMiddleware,
+        allow_origins=["*"],
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
+
+    @web_app.post("/generate")
+    async def generate_endpoint(data: dict):
+        try:
+            img_str = data.get("image")
+            if not img_str:
+                return {"status": "error", "message": "Missing image"}
+
+            model = SF3DModel()
+            b64_out = model.generate_mesh.remote(img_str)
+            return {"status": "success", "model": b64_out}
+        except Exception as e:
+            return {"status": "error", "message": str(e)}
+
     return web_app
     
