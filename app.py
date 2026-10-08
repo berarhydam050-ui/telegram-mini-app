@@ -6,16 +6,16 @@ import sys
 import modal
 
 
-# =========================================================
+# ============================================================
 # MODAL APP
-# =========================================================
+# ============================================================
 
 app = modal.App("sf3d-backend")
 
 
-# =========================================================
-# HUGGING FACE CACHE VOLUME
-# =========================================================
+# ============================================================
+# HUGGING FACE CACHE
+# ============================================================
 
 hf_cache = modal.Volume.from_name(
     "sf3d-weights-cache",
@@ -25,9 +25,9 @@ hf_cache = modal.Volume.from_name(
 HF_CACHE_DIR = "/root/.cache/huggingface"
 
 
-# =========================================================
-# SF3D IMAGE
-# =========================================================
+# ============================================================
+# BUILD SF3D IMAGE
+# ============================================================
 
 sf3d_image = (
     modal.Image.from_registry(
@@ -35,9 +35,9 @@ sf3d_image = (
         add_python="3.10",
     )
 
-    # -----------------------------------------------------
-    # System packages
-    # -----------------------------------------------------
+    # --------------------------------------------------------
+    # Linux build tools
+    # --------------------------------------------------------
 
     .apt_install(
         "git",
@@ -50,20 +50,18 @@ sf3d_image = (
         "libglib2.0-0",
     )
 
-    # -----------------------------------------------------
-    # Install setuptools/wheel from normal PyPI
-    # IMPORTANT:
-    # Do NOT put these in the CUDA PyTorch pip install.
-    # -----------------------------------------------------
+    # --------------------------------------------------------
+    # Python build tools
+    # --------------------------------------------------------
 
     .pip_install(
         "setuptools==69.5.1",
         "wheel",
     )
 
-    # -----------------------------------------------------
-    # Install CUDA PyTorch separately
-    # -----------------------------------------------------
+    # --------------------------------------------------------
+    # PyTorch CUDA 12.1
+    # --------------------------------------------------------
 
     .pip_install(
         "torch==2.4.0",
@@ -71,28 +69,90 @@ sf3d_image = (
         index_url="https://download.pytorch.org/whl/cu121",
     )
 
-    # -----------------------------------------------------
-    # Clone official Stable Fast 3D repository
-    # -----------------------------------------------------
+    # --------------------------------------------------------
+    # Clone SF3D
+    # --------------------------------------------------------
 
     .run_commands(
-        "git clone https://github.com/Stability-AI/stable-fast-3d.git /app/stable-fast-3d",
-
-        "cd /app/stable-fast-3d && pip install -r requirements.txt --no-build-isolation",
+        "git clone https://github.com/Stability-AI/stable-fast-3d.git /app/stable-fast-3d"
     )
 
-    # -----------------------------------------------------
-    # Web API dependencies
-    # -----------------------------------------------------
+    # --------------------------------------------------------
+    # Install SF3D's Python dependencies EXCEPT the two
+    # local native extensions.
+    # --------------------------------------------------------
+
+    .run_commands(
+        """
+        cd /app/stable-fast-3d && \
+        grep -v '^\\./texture_baker/' requirements.txt | \
+        grep -v '^\\./uv_unwrapper/' > /tmp/sf3d_requirements.txt && \
+        pip install -r /tmp/sf3d_requirements.txt
+        """
+    )
+
+    # --------------------------------------------------------
+    # Build texture_baker and uv_unwrapper AFTER Torch
+    # is already installed.
+    #
+    # A10G = NVIDIA compute capability 8.6
+    # --------------------------------------------------------
+
+    .env(
+        {
+            "CUDA_HOME": "/usr/local/cuda",
+            "TORCH_CUDA_ARCH_LIST": "8.6",
+            "MAX_JOBS": "2",
+            "USE_CUDA": "1",
+            "USE_NATIVE_ARCH": "0",
+            "PYTHONUNBUFFERED": "1",
+        }
+    )
+
+    # --------------------------------------------------------
+    # Build texture_baker
+    # --------------------------------------------------------
+
+    .run_commands(
+        """
+        cd /app/stable-fast-3d && \
+        CUDA_HOME=/usr/local/cuda \
+        TORCH_CUDA_ARCH_LIST=8.6 \
+        MAX_JOBS=2 \
+        USE_CUDA=1 \
+        USE_NATIVE_ARCH=0 \
+        pip install ./texture_baker/ --no-build-isolation
+        """
+    )
+
+    # --------------------------------------------------------
+    # Build uv_unwrapper
+    # --------------------------------------------------------
+
+    .run_commands(
+        """
+        cd /app/stable-fast-3d && \
+        CUDA_HOME=/usr/local/cuda \
+        TORCH_CUDA_ARCH_LIST=8.6 \
+        MAX_JOBS=2 \
+        USE_CUDA=1 \
+        USE_NATIVE_ARCH=0 \
+        pip install ./uv_unwrapper/ --no-build-isolation
+        """
+    )
+
+    # --------------------------------------------------------
+    # FastAPI
+    # --------------------------------------------------------
 
     .pip_install(
         "fastapi",
         "uvicorn",
     )
 
-    # -----------------------------------------------------
-    # Environment variables
-    # -----------------------------------------------------
+    # --------------------------------------------------------
+    # Environment
+    # --------------------------------------------------------
 
     .env(
         {
@@ -100,52 +160,47 @@ sf3d_image = (
             "HF_HUB_CACHE": f"{HF_CACHE_DIR}/hub",
             "TRANSFORMERS_CACHE": f"{HF_CACHE_DIR}/transformers",
             "TORCH_HOME": "/root/.cache/torch",
+            "CUDA_HOME": "/usr/local/cuda",
+            "TORCH_CUDA_ARCH_LIST": "8.6",
+            "MAX_JOBS": "2",
+            "USE_CUDA": "1",
+            "USE_NATIVE_ARCH": "0",
             "PYTHONUNBUFFERED": "1",
         }
     )
 )
 
 
-# =========================================================
+# ============================================================
 # SF3D MODEL
-# =========================================================
+# ============================================================
 
 @app.cls(
     image=sf3d_image,
-
-    # NVIDIA A10G GPU
     gpu="A10G",
-
-    # Persistent Hugging Face cache
     volumes={
         HF_CACHE_DIR: hf_cache,
     },
-
-    # Hugging Face token
     secrets=[
         modal.Secret.from_name("huggingface-secret")
     ],
-
-    # Maximum request/container time
     timeout=300,
-
-    # Shut down idle GPU after 60 seconds
     scaledown_window=60,
 )
 class SF3DModel:
 
-    # =====================================================
-    # LOAD MODEL WHEN CONTAINER STARTS
-    # =====================================================
+    # ========================================================
+    # LOAD MODEL
+    # ========================================================
 
     @modal.enter()
     def load_model(self):
 
         import torch
 
-        # -------------------------------------------------
-        # Add official SF3D repository to Python path
-        # -------------------------------------------------
+        # ----------------------------------------------------
+        # Add SF3D repository
+        # ----------------------------------------------------
 
         repo_path = "/app/stable-fast-3d"
 
@@ -153,7 +208,7 @@ class SF3DModel:
             sys.path.insert(0, repo_path)
 
         print("==========================================")
-        print("Starting Stable Fast 3D")
+        print("SF3D STARTING")
         print("==========================================")
 
         print(
@@ -166,14 +221,9 @@ class SF3DModel:
             torch.cuda.is_available(),
         )
 
-        # -------------------------------------------------
-        # Make sure GPU is available
-        # -------------------------------------------------
-
         if not torch.cuda.is_available():
-
             raise RuntimeError(
-                "CUDA is not available inside the Modal container."
+                "CUDA is not available."
             )
 
         print(
@@ -186,18 +236,35 @@ class SF3DModel:
             torch.cuda.get_device_name(0),
         )
 
-        # -------------------------------------------------
-        # IMPORTANT:
-        # Official SF3D import
-        # -------------------------------------------------
+        # ----------------------------------------------------
+        # Test native modules BEFORE loading SF3D
+        # ----------------------------------------------------
+
+        print("Testing texture_baker...")
+
+        import texture_baker
+
+        print(
+            "texture_baker loaded:",
+            texture_baker,
+        )
+
+        print("Testing uv_unwrapper...")
+
+        import uv_unwrapper
+
+        print(
+            "uv_unwrapper loaded:",
+            uv_unwrapper,
+        )
+
+        print("Native SF3D extensions loaded successfully.")
+
+        # ----------------------------------------------------
+        # Official SF3D API
+        # ----------------------------------------------------
 
         from sf3d.system import SF3D
-
-        print("Importing SF3D successfully.")
-
-        # -------------------------------------------------
-        # Load official Stable Fast 3D model
-        # -------------------------------------------------
 
         print("Loading Stable Fast 3D model...")
 
@@ -207,28 +274,20 @@ class SF3DModel:
             weight_name="model.safetensors",
         )
 
-        # -------------------------------------------------
-        # Move model to GPU
-        # -------------------------------------------------
-
         self.model.to("cuda")
 
         self.model.eval()
 
         print("==========================================")
-        print("SF3D MODEL LOADED SUCCESSFULLY")
+        print("SF3D MODEL READY")
         print("==========================================")
-
-        # -------------------------------------------------
-        # Save Hugging Face cache
-        # -------------------------------------------------
 
         hf_cache.commit()
 
 
-    # =====================================================
-    # IMAGE → 3D
-    # =====================================================
+    # ========================================================
+    # GENERATE MESH
+    # ========================================================
 
     @modal.method()
     def generate_mesh(
@@ -239,30 +298,32 @@ class SF3DModel:
     ):
 
         import torch
-        from PIL import Image
         import rembg
 
+        from PIL import Image
+
+        from sf3d.utils import (
+            remove_background,
+            resize_foreground,
+        )
+
         print("==========================================")
-        print("Received image")
+        print("SF3D GENERATION")
         print("==========================================")
 
-        # -------------------------------------------------
-        # Remove data URL prefix
-        #
-        # Example:
-        # data:image/png;base64,AAAA...
-        # -------------------------------------------------
+        # ----------------------------------------------------
+        # Remove data URL header
+        # ----------------------------------------------------
 
         if "," in image_base64:
-
             image_base64 = image_base64.split(
                 ",",
-                1
+                1,
             )[1]
 
-        # -------------------------------------------------
-        # Decode Base64
-        # -------------------------------------------------
+        # ----------------------------------------------------
+        # Decode
+        # ----------------------------------------------------
 
         try:
 
@@ -276,48 +337,50 @@ class SF3DModel:
                 f"Invalid base64 image: {e}"
             )
 
-        # -------------------------------------------------
-        # Open image
-        # -------------------------------------------------
+        # ----------------------------------------------------
+        # Open
+        # ----------------------------------------------------
 
         image = Image.open(
             io.BytesIO(image_bytes)
         ).convert("RGBA")
 
         print(
-            "Image size:",
+            "Input image:",
             image.size,
         )
 
-        # -------------------------------------------------
-        # Remove background
-        # -------------------------------------------------
+        # ----------------------------------------------------
+        # Background removal
+        # ----------------------------------------------------
 
         print("Removing background...")
 
         rembg_session = rembg.new_session()
 
-        image = rembg.remove(
+        image = remove_background(
             image,
-            session=rembg_session,
+            rembg_session,
         )
 
-        image = image.convert("RGBA")
+        # ----------------------------------------------------
+        # Resize foreground
+        # ----------------------------------------------------
 
-        print("Background removed.")
+        image = resize_foreground(
+            image,
+            0.85,
+        )
 
-        # -------------------------------------------------
-        # Validate texture resolution
-        # -------------------------------------------------
+        # ----------------------------------------------------
+        # Settings
+        # ----------------------------------------------------
 
         try:
-
             texture_resolution = int(
                 texture_resolution
             )
-
         except Exception:
-
             texture_resolution = 1024
 
         if texture_resolution not in (
@@ -325,56 +388,49 @@ class SF3DModel:
             1024,
             2048,
         ):
-
             texture_resolution = 1024
-
-        # -------------------------------------------------
-        # Validate remesh option
-        # -------------------------------------------------
 
         if remesh_option not in (
             "none",
             "triangle",
             "quad",
         ):
-
             remesh_option = "none"
 
-        # -------------------------------------------------
-        # Run SF3D
-        # -------------------------------------------------
+        # ----------------------------------------------------
+        # Inference
+        # ----------------------------------------------------
 
-        print("==========================================")
-        print("Running SF3D inference...")
-        print("Texture:", texture_resolution)
-        print("Remesh:", remesh_option)
-        print("==========================================")
+        print("Running SF3D...")
 
-        with torch.inference_mode():
+        with torch.no_grad():
 
-            mesh, global_dict = self.model.run_image(
-                image,
-                bake_resolution=texture_resolution,
-                remesh=remesh_option,
-                vertex_count=-1,
-            )
+            with torch.autocast(
+                device_type="cuda",
+                dtype=torch.bfloat16,
+            ):
 
-        print("SF3D inference finished.")
+                mesh, global_dict = self.model.run_image(
+                    image,
+                    bake_resolution=texture_resolution,
+                    remesh=remesh_option,
+                    vertex_count=-1,
+                )
 
-        # -------------------------------------------------
-        # Check mesh
-        # -------------------------------------------------
+        print("SF3D finished.")
+
+        # ----------------------------------------------------
+        # Validate
+        # ----------------------------------------------------
 
         if mesh is None:
-
             raise RuntimeError(
                 "SF3D returned no mesh."
             )
 
         if len(mesh.vertices) == 0:
-
             raise RuntimeError(
-                "SF3D generated an empty mesh."
+                "SF3D returned an empty mesh."
             )
 
         print(
@@ -387,46 +443,39 @@ class SF3DModel:
             len(mesh.faces),
         )
 
-        # -------------------------------------------------
+        # ----------------------------------------------------
         # Export GLB
-        # -------------------------------------------------
+        # ----------------------------------------------------
 
-        print("Exporting GLB...")
-
-        output_buffer = io.BytesIO()
+        output = io.BytesIO()
 
         mesh.export(
-            output_buffer,
+            output,
             file_type="glb",
             include_normals=True,
         )
 
-        output_buffer.seek(0)
+        output.seek(0)
 
-        glb_bytes = output_buffer.read()
+        glb = output.read()
 
         print(
-            "GLB size:",
-            len(glb_bytes),
-            "bytes",
+            "GLB bytes:",
+            len(glb),
         )
 
-        # -------------------------------------------------
-        # Convert GLB → Base64
-        # -------------------------------------------------
+        # ----------------------------------------------------
+        # Return Base64
+        # ----------------------------------------------------
 
-        result = base64.b64encode(
-            glb_bytes
+        return base64.b64encode(
+            glb
         ).decode("utf-8")
 
-        print("GLB encoded successfully.")
 
-        return result
-
-
-# =========================================================
-# FASTAPI WEB API
-# =========================================================
+# ============================================================
+# FASTAPI
+# ============================================================
 
 @app.function(
     image=sf3d_image,
@@ -443,9 +492,9 @@ def api():
         version="1.0",
     )
 
-    # =====================================================
+    # --------------------------------------------------------
     # CORS
-    # =====================================================
+    # --------------------------------------------------------
 
     web_app.add_middleware(
         CORSMiddleware,
@@ -455,9 +504,9 @@ def api():
         allow_headers=["*"],
     )
 
-    # =====================================================
-    # HEALTH CHECK
-    # =====================================================
+    # --------------------------------------------------------
+    # Health
+    # --------------------------------------------------------
 
     @web_app.get("/")
     async def health():
@@ -467,18 +516,16 @@ def api():
             "service": "sf3d-backend",
         }
 
-    # =====================================================
-    # GENERATE 3D
-    # =====================================================
+    # --------------------------------------------------------
+    # Generate
+    # --------------------------------------------------------
 
     @web_app.post("/generate")
-    async def generate_endpoint(data: dict):
+    async def generate_endpoint(
+        data: dict,
+    ):
 
         try:
-
-            # -------------------------------------------------
-            # Get image
-            # -------------------------------------------------
 
             image = data.get("image")
 
@@ -488,10 +535,6 @@ def api():
                     "status": "error",
                     "message": "Missing image",
                 }
-
-            # -------------------------------------------------
-            # Optional settings
-            # -------------------------------------------------
 
             texture_resolution = data.get(
                 "texture_resolution",
@@ -503,36 +546,16 @@ def api():
                 "none",
             )
 
-            # -------------------------------------------------
-            # Create model container
-            # -------------------------------------------------
-
             print(
-                "Creating SF3D model instance..."
+                "Starting SF3D GPU call..."
             )
 
             model = SF3DModel()
-
-            # -------------------------------------------------
-            # Send image to GPU
-            # -------------------------------------------------
-
-            print(
-                "Sending generation request to GPU..."
-            )
 
             result = await model.generate_mesh.remote.aio(
                 image,
                 int(texture_resolution),
                 str(remesh_option),
-            )
-
-            # -------------------------------------------------
-            # Success
-            # -------------------------------------------------
-
-            print(
-                "Generation completed successfully."
             )
 
             return {
@@ -544,17 +567,9 @@ def api():
 
             import traceback
 
-            print(
-                "=========================================="
-            )
-
-            print(
-                "GENERATION ERROR"
-            )
-
-            print(
-                "=========================================="
-            )
+            print("================================")
+            print("SF3D ERROR")
+            print("================================")
 
             traceback.print_exc()
 
@@ -562,9 +577,5 @@ def api():
                 "status": "error",
                 "message": str(e),
             }
-
-    # =====================================================
-    # Return FastAPI application
-    # =====================================================
 
     return web_app
