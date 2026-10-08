@@ -1,7 +1,12 @@
-
 import base64
 import io
 import os
+import sys
+
+# Globally inject repository directory into Python path before imports
+if "/app/stable_fast_3d" not in sys.path:
+    sys.path.insert(0, "/app/stable_fast_3d")
+
 import modal
 
 cache_volume = modal.Volume.from_name("sf3d-weights-cache", create_if_missing=True)
@@ -25,7 +30,7 @@ sf3d_image = (
     .run_commands(
         "git clone https://github.com/stability-ai/stable-fast-3d /app/stable_fast_3d",
         "cd /app/stable_fast_3d && pip install -r requirements.txt",
-        "cp -r /app/stable_fast_3d/sf3d /usr/local/lib/python3.10/site-packages/"
+        "python3 -c \"import site, shutil; shutil.copytree('/app/stable_fast_3d/sf3d', site.getsitepackages()[0] + '/sf3d', dirs_exist_ok=True)\""
     )
 )
 
@@ -100,15 +105,5 @@ def api():
     @web_app.post("/generate")
     async def generate_endpoint(data: dict):
         try:
-            img_str = data.get("image")
-            if not img_str:
-                return {"status": "error", "message": "Missing image"}
-
-            model = SF3DModel()
-            b64_out = await model.generate_mesh.remote.aio(img_str)
-            return {"status": "success", "model": b64_out}
-        except Exception as e:
-            return {"status": "error", "message": str(e)}
-
-    return web_app
-    
+            img_str =
+            
