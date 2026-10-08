@@ -53,6 +53,8 @@ class SF3DModel:
             token=os.environ.get("HF_TOKEN")
         ).to("cuda")
 
+        cache_volume.commit()
+
     @modal.method()
     def generate_mesh(self, img_str: str):
         import sys
