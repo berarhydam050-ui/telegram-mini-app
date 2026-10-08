@@ -2,6 +2,8 @@ import base64
 import io
 import os
 import modal
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 
 cache_volume = modal.Volume.from_name("sf3d-weights-cache", create_if_missing=True)
 CACHE_DIR = "/root/.cache/huggingface"
@@ -28,6 +30,16 @@ sf3d_image = (
 )
 
 app = modal.App("sf3d-backend")
+web_app = FastAPI()
+
+# Enable CORS for browser / Telegram WebApp preflight requests
+web_app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 @app.cls(
     image=sf3d_image,
@@ -52,8 +64,8 @@ class SF3DModel:
             token=os.environ.get("HF_TOKEN")
         ).to("cuda")
 
-    @modal.fastapi_endpoint(method="POST")
-    def generate(self, data: dict):
+    @modal.method()
+    def generate_mesh(self, img_str: str):
         import sys
         sys.path.append("/app/stable_fast_3d")
         import torch
@@ -61,28 +73,37 @@ class SF3DModel:
         from rembg import remove
         from sf3d.utils import save_glb
 
-        try:
-            img_str = data.get("image")
-            if not img_str:
-                return {"status": "error", "message": "Missing image"}
+        if "," in img_str:
+            img_str = img_str.split(",")[1]
 
-            if "," in img_str:
-                img_str = img_str.split(",")[1]
+        img_bytes = base64.b64decode(img_str)
+        img = Image.open(io.BytesIO(img_bytes)).convert("RGB")
+        clean_img = remove(img)
 
-            img_bytes = base64.b64decode(img_str)
-            img = Image.open(io.BytesIO(img_bytes)).convert("RGB")
-            clean_img = remove(img)
+        with torch.inference_mode():
+            out = self.pipeline(clean_img, input_processing=True)
 
-            with torch.inference_mode():
-                out = self.pipeline(clean_img, input_processing=True)
+        buf = io.BytesIO()
+        save_glb(buf, out)
+        buf.seek(0)
 
-            buf = io.BytesIO()
-            save_glb(buf, out)
-            buf.seek(0)
+        return base64.b64encode(buf.read()).decode("utf-8")
 
-            b64_out = base64.b64encode(buf.read()).decode("utf-8")
-            return {"status": "success", "model": b64_out}
+@web_app.post("/generate")
+async def generate_endpoint(data: dict):
+    try:
+        img_str = data.get("image")
+        if not img_str:
+            return {"status": "error", "message": "Missing image"}
 
-        except Exception as e:
-            return {"status": "error", "message": str(e)}
-            
+        model = SF3DModel()
+        b64_out = model.generate_mesh.remote(img_str)
+        return {"status": "success", "model": b64_out}
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+
+@app.function(image=sf3d_image)
+@modal.asgi_app()
+def api():
+    return web_app
+    
