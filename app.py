@@ -11,7 +11,7 @@ image = (
     .apt_install(
         "git",
         "build-essential",
-        "clang",  # <-- Added to fix the missing clang++ compiler error
+        "clang",
         "ninja-build",
         "cmake",
         "wget",
@@ -22,6 +22,7 @@ image = (
     .pip_install(
         "setuptools==69.5.1",
         "wheel",
+        "huggingface_hub",  # Explicitly added for authentication
     )
     .pip_install(
         "torch==2.4.0",
@@ -67,9 +68,19 @@ class SF3DModel:
 
   @modal.enter()
   def load_model(self):
+    import os
     import torch
+    from huggingface_hub import login
 
     print("STARTING SF3D")
+    
+    # 1. Explicitly authenticate with Hugging Face
+    hf_token = os.environ.get("HF_TOKEN")
+    if not hf_token:
+      raise ValueError("HF_TOKEN is missing. Check your huggingface-secret in Modal.")
+    print("Authenticating with Hugging Face...")
+    login(token=hf_token)
+
     print("PyTorch:", torch.__version__)
     print("CUDA available:", torch.cuda.is_available())
     if torch.cuda.is_available():
@@ -77,14 +88,14 @@ class SF3DModel:
       print("GPU:", torch.cuda.get_device_name(0))
 
     import texture_baker
-
     print("texture_baker OK")
+    
     import uv_unwrapper
-
     print("uv_unwrapper OK")
 
     from sf3d.system import SF3D
 
+    # 2. Load the model now that we are authenticated
     self.model = SF3D.from_pretrained(
         "stabilityai/stable-fast-3d",
         config_name="config.yaml",
