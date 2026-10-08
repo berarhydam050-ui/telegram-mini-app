@@ -27,7 +27,6 @@ image = (
         "torchvision==0.19.0",
         index_url="https://download.pytorch.org/whl/cu121",
     )
-    # Fixed: Create /app first using mkdir -p
     .run_commands(
         "mkdir -p /app && cd /app && git clone"
         " https://github.com/Stability-AI/stable-fast-3d.git"
@@ -206,7 +205,7 @@ class SF3DModel:
     timeout=900,
     secrets=[modal.Secret.from_name("huggingface-secret")],
 )
-@app.asgi_app()
+@modal.asgi_app()
 def api():
   from fastapi import FastAPI
   from fastapi.middleware.cors import CORSMiddleware
