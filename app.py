@@ -23,8 +23,9 @@ sf3d_image = (
     )
     .run_commands(
         "git clone https://github.com/stability-ai/stable-fast-3d /app/stable_fast_3d",
-        "cd /app/stable_fast_3d && pip install -r requirements.txt && pip install -e ."
+        "cd /app/stable_fast_3d && pip install -r requirements.txt"
     )
+    .env({"PYTHONPATH": "/app/stable_fast_3d"})
 )
 
 app = modal.App("sf3d-backend")
@@ -109,3 +110,4 @@ def api():
             return {"status": "error", "message": str(e)}
 
     return web_app
+    
