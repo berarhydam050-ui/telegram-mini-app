@@ -1,3 +1,5 @@
+ web_app
+    
 import base64
 import io
 import os
@@ -23,7 +25,7 @@ sf3d_image = (
     )
     .run_commands(
         "git clone https://github.com/stability-ai/stable-fast-3d /app/stable_fast_3d",
-        "cd /app/stable_fast_3d && pip install -r requirements.txt"
+        "cd /app/stable_fast_3d && pip install -r requirements.txt && pip install -e ."
     )
 )
 
@@ -40,8 +42,6 @@ app = modal.App("sf3d-backend")
 class SF3DModel:
     @modal.enter()
     def setup(self):
-        import sys
-        sys.path.append("/app/stable_fast_3d")
         import torch
         from sf3d.pipeline import StableFast3DPipeline
 
@@ -57,8 +57,6 @@ class SF3DModel:
 
     @modal.method()
     def generate_mesh(self, img_str: str):
-        import sys
-        sys.path.append("/app/stable_fast_3d")
         import torch
         from PIL import Image
         from rembg import remove
@@ -113,4 +111,3 @@ def api():
             return {"status": "error", "message": str(e)}
 
     return web_app
-    
