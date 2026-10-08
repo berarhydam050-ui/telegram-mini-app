@@ -1,59 +1,150 @@
-import base64
-import io
-import os
-import modal
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Image to 3D Generator</title>
+  <script src="https://telegram.org/js/telegram-web-app.js"></script>
+  <script type="module" src="https://ajax.googleapis.com/ajax/libs/model-viewer/3.4.0/model-viewer.min.js"></script>
+  <style>
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      background-color: var(--tg-theme-bg-color, #17212b);
+      color: var(--tg-theme-text-color, #ffffff);
+      margin: 0;
+      padding: 20px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      min-height: 100vh;
+      box-sizing: border-box;
+    }
+    h2 { margin-bottom: 15px; font-size: 1.3rem; }
+    .upload-box {
+      border: 2px dashed var(--tg-theme-button-color, #5288c1);
+      border-radius: 12px;
+      padding: 20px;
+      text-align: center;
+      width: 100%;
+      max-width: 350px;
+      cursor: pointer;
+      box-sizing: border-box;
+      margin-bottom: 20px;
+    }
+    input[type="file"] { display: none; }
+    #preview-img {
+      max-width: 100%;
+      max-height: 180px;
+      border-radius: 8px;
+      display: none;
+      margin-top: 10px;
+    }
+    button {
+      background-color: var(--tg-theme-button-color, #5288c1);
+      color: var(--tg-theme-button-text-color, #ffffff);
+      border: none;
+      padding: 12px 24px;
+      font-size: 1rem;
+      font-weight: bold;
+      border-radius: 8px;
+      cursor: pointer;
+      width: 100%;
+      max-width: 350px;
+    }
+    button:disabled { opacity: 0.6; cursor: not-allowed; }
+    #status { margin-top: 15px; font-size: 0.9rem; color: #888; text-align: center; }
+    model-viewer {
+      width: 100%;
+      max-width: 350px;
+      height: 320px;
+      background-color: #0e1621;
+      border-radius: 12px;
+      margin-top: 20px;
+      display: none;
+    }
+  </style>
+</head>
+<body>
 
-cache_volume = modal.Volume.from_name("sf3d-weights-cache", create_if_missing=True)
-CACHE_DIR = "/root/.cache/huggingface"
+  <h2>2D Image to 3D Model</h2>
 
-sf3d_image = (
-    modal.Image.debian_slim(python_version="3.10")
-    .apt_install("git", "wget", "unzip", "libgl1-mesa-glx", "libglib2.0-0")
-    .pip_install(
-        "torch", "torchvision", index_url="https://download.pytorch.org/whl/cu121"
-    )
-    .pip_install("rembg", "pillow", "trimesh", "accelerate", "transformers", "diffusers", "einops")
-    .run_commands(
-        "git clone https://github.com/stability-ai/stable-fast-3d /app/stable_fast_3d",
-        "pip install -r /app/stable_fast_3d/requirements.txt"
-    )
-)
+  <div class="upload-box" onclick="document.getElementById('fileInput').click()">
+    <span id="uploadText">Tap to select an image</span>
+    <img id="preview-img" alt="Preview" />
+    <input type="file" id="fileInput" accept="image/*" onchange="handleFile(event)" />
+  </div>
 
-app = modal.App("sf3d-backend")
+  <button id="generateBtn" onclick="generate3D()" disabled>Generate 3D Model</button>
+  <div id="status"></div>
 
-@app.cls(
-    image=sf3d_image,
-    gpu="A10G",
-    volumes={CACHE_DIR: cache_volume},
-    scaledown_window=60
-)
-class SF3DModel:
-    @modal.enter()
-    def setup(self):
-        import sys
-        sys.path.append("/app/stable_fast_3d")
-        import torch
-        from sf3d.pipeline import StableFast3DPipeline
+  <model-viewer id="viewer" camera-controls auto-rotate shadow-intensity="1"></model-viewer>
 
-        os.environ["HF_HOME"] = CACHE_DIR
-        
-        print("Loading Stable Fast 3D into GPU memory...")
-        self.pipeline = StableFast3DPipeline.from_pretrained(
-            "stabilityai/stable-fast-3d",
-            torch_dtype=torch.float16,
-            cache_dir=CACHE_DIR
-        ).to("cuda")
-        print("Model loaded successfully.")
+  <script>
+    const Telegram = window.Telegram.WebApp;
+    Telegram.ready();
+    Telegram.expand();
 
-    @modal.web_endpoint(method="POST")
-    def generate(self, data: dict):
-        import sys
-        sys.path.append("/app/stable_fast_3d")
-        import torch
-        from PIL import Image
-        from rembg import remove
-        from sf3d.utils import save_glb
+    const MODAL_ENDPOINT = "https://berarhydam050--sf3d-backend-sf3dmodel-generate.modal.run";
 
-        try:
-            base64_img = data.
-            
+    let selectedBase64 = "";
+
+    function handleFile(event) {
+      const file = event.target.files[0];
+      if (!file) return;
+
+      const reader = new FileReader();
+      reader.onload = function(e) {
+        selectedBase64 = e.target.result;
+        const img = document.getElementById("preview-img");
+        img.src = selectedBase64;
+        img.style.display = "block";
+        document.getElementById("uploadText").style.display = "none";
+        document.getElementById("generateBtn").disabled = false;
+      };
+      reader.readAsDataURL(file);
+    }
+
+    async function generate3D() {
+      const btn = document.getElementById("generateBtn");
+      const status = document.getElementById("status");
+      const viewer = document.getElementById("viewer");
+
+      btn.disabled = true;
+      status.innerText = "Processing image on GPU (takes ~10 seconds)...";
+      viewer.style.display = "none";
+
+      try {
+        const response = await fetch(MODAL_ENDPOINT, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ image: selectedBase64 })
+        });
+
+        const data = await response.json();
+
+        if (data.status === "success") {
+          status.innerText = "Model generated successfully!";
+          
+          const byteCharacters = atob(data.model);
+          const byteNumbers = new Array(byteCharacters.length);
+          for (let i = 0; i < byteCharacters.length; i++) {
+            byteNumbers[i] = byteCharacters.charCodeAt(i);
+          }
+          const byteArray = new Uint8Array(byteNumbers);
+          const blob = new Blob([byteArray], { type: "model/gltf-binary" });
+          const blobUrl = URL.createObjectURL(blob);
+
+          viewer.src = blobUrl;
+          viewer.style.display = "block";
+        } else {
+          status.innerText = "Error: " + (data.message || "Generation failed.");
+          btn.disabled = false;
+        }
+      } catch (err) {
+        status.innerText = "Failed to connect to backend: " + err.message;
+        btn.disabled = false;
+      }
+    }
+  </script>
+</body>
+</html>
