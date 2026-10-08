@@ -1,151 +1,176 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-  <title>Image to 3D Generator</title>
-  <script src="https://telegram.org/js/telegram-web-app.js"></script>
-  <script type="module" src="https://ajax.googleapis.com/ajax/libs/model-viewer/3.4.0/model-viewer.min.js"></script>
-  <style>
-    body {
-      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-      background-color: var(--tg-theme-bg-color, #17212b);
-      color: var(--tg-theme-text-color, #ffffff);
-      margin: 0;
-      padding: 20px;
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-      min-height: 100vh;
-      box-sizing: border-box;
-    }
-    h2 { margin-bottom: 15px; font-size: 1.3rem; }
-    .upload-box {
-      border: 2px dashed var(--tg-theme-button-color, #5288c1);
-      border-radius: 12px;
-      padding: 20px;
-      text-align: center;
-      width: 100%;
-      max-width: 350px;
-      cursor: pointer;
-      box-sizing: border-box;
-      margin-bottom: 20px;
-    }
-    input[type="file"] { display: none; }
-    #preview-img {
-      max-width: 100%;
-      max-height: 180px;
-      border-radius: 8px;
-      display: none;
-      margin-top: 10px;
-    }
-    button {
-      background-color: var(--tg-theme-button-color, #5288c1);
-      color: var(--tg-theme-button-text-color, #ffffff);
-      border: none;
-      padding: 12px 24px;
-      font-size: 1rem;
-      font-weight: bold;
-      border-radius: 8px;
-      cursor: pointer;
-      width: 100%;
-      max-width: 350px;
-    }
-    button:disabled { opacity: 0.6; cursor: not-allowed; }
-    #status { margin-top: 15px; font-size: 0.9rem; color: #888; text-align: center; }
-    model-viewer {
-      width: 100%;
-      max-width: 350px;
-      height: 320px;
-      background-color: #0e1621;
-      border-radius: 12px;
-      margin-top: 20px;
-      display: none;
-    }
-  </style>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+    <title>Image to 3D Generator</title>
+    <script src="https://telegram.org/js/telegram-web-app.js"></script>
+    <script type="module" src="https://ajax.googleapis.com/ajax/libs/model-viewer/3.4.0/model-viewer.min.js"></script>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            background-color: var(--tg-theme-bg-color, #17212b);
+            color: var(--tg-theme-text-color, #ffffff);
+            margin: 0;
+            padding: 20px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            min-height: 100vh;
+            box-sizing: border-box;
+        }
+        h2 {
+            margin-bottom: 15px;
+            font-size: 1.3rem;
+        }
+        .upload-box {
+            border: 2px dashed var(--tg-theme-button-color, #5288c1);
+            border-radius: 12px;
+            padding: 20px;
+            text-align: center;
+            width: 100%;
+            max-width: 350px;
+            cursor: pointer;
+            box-sizing: border-box;
+            margin-bottom: 20px;
+        }
+        input[type="file"] {
+            display: none;
+        }
+        #preview-img {
+            max-width: 100%;
+            max-height: 180px;
+            border-radius: 8px;
+            display: none;
+            margin-top: 10px;
+        }
+        button {
+            background-color: var(--tg-theme-button-color, #5288c1);
+            color: var(--tg-theme-button-text-color, #ffffff);
+            border: none;
+            padding: 12px 24px;
+            font-size: 1rem;
+            font-weight: bold;
+            border-radius: 8px;
+            cursor: pointer;
+            width: 100%;
+            max-width: 350px;
+        }
+        button:disabled {
+            opacity: 0.4;
+            cursor: not-allowed;
+        }
+        #status {
+            margin-top: 15px;
+            font-size: 0.9rem;
+            color: #888;
+            text-align: center;
+        }
+        model-viewer {
+            width: 100%;
+            max-width: 350px;
+            height: 320px;
+            background-color: #0e1621;
+            border-radius: 12px;
+            margin-top: 20px;
+            display: none;
+        }
+    </style>
 </head>
 <body>
 
-  <h2>2D Image to 3D Model</h2>
+    <h2>2D Image to 3D Model</h2>
 
-  <div class="upload-box" onclick="document.getElementById('fileInput').click()">
-    <span id="uploadText">Tap to select an image</span>
-    <img id="preview-img" alt="Preview" />
-    <input type="file" id="fileInput" accept="image/*" onchange="handleFile(event)" />
-  </div>
+    <div class="upload-box" onclick="document.getElementById('fileInput').click()">
+        <span id="uploadText">Tap to select an image</span>
+        <img id="preview-img" alt="Preview" />
+        <input type="file" id="fileInput" accept="image/*" onchange="handleFile(event)" />
+    </div>
 
-  <button id="generateBtn" onclick="generate3D()" disabled>Generate 3D Model</button>
-  <div id="status"></div>
+    <button id="generateBtn" onclick="generate3D()" disabled>Generate 3D Model</button>
+    <div id="status"></div>
 
-  <model-viewer id="viewer" camera-controls auto-rotate shadow-intensity="1"></model-viewer>
+    <model-viewer id="viewer" camera-controls auto-rotate shadow-intensity="1"></model-viewer>
 
-  <script>
-    const Telegram = window.Telegram.WebApp;
-    Telegram.ready();
-    Telegram.expand();
+    <script>
+        const Telegram = window.Telegram.WebApp;
+        Telegram.ready();
+        Telegram.expand();
 
-    const MODAL_ENDPOINT = "https://berarhydam050--sf3d-backend-api.modal.run/generate";
-    
+        const MODAL_ENDPOINT = "https://berarhydam050--sf3d-backend-api.modal.run/generate";
 
-    let selectedBase64 = "";
+        let selectedBase64 = "";
 
-    function handleFile(event) {
-      const file = event.target.files[0];
-      if (!file) return;
+        function handleFile(event) {
+            const file = event.target.files[0];
+            if (!file) return;
 
-      const reader = new FileReader();
-      reader.onload = function(e) {
-        selectedBase64 = e.target.result;
-        const img = document.getElementById("preview-img");
-        img.src = selectedBase64;
-        img.style.display = "block";
-        document.getElementById("uploadText").style.display = "none";
-        document.getElementById("generateBtn").disabled = false;
-      };
-      reader.readAsDataURL(file);
-    }
+            const img = new Image();
+            const reader = new FileReader();
 
-    async function generate3D() {
-      const btn = document.getElementById("generateBtn");
-      const status = document.getElementById("status");
-      const viewer = document.getElementById("viewer");
+            reader.onload = function(e) {
+                img.onload = function() {
+                    const canvas = document.createElement('canvas');
+                    const ctx = canvas.getContext('2d');
+                    canvas.width = 512;
+                    canvas.height = 512;
+                    ctx.drawImage(img, 0, 0, 512, 512);
 
-      btn.disabled = true;
-      status.innerText = "Processing image on GPU (takes ~10 seconds)...";
-      viewer.style.display = "none";
+                    selectedBase64 = canvas.toDataURL('image/png');
 
-      try {
-        const response = await fetch(MODAL_ENDPOINT, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ image: selectedBase64 })
-        });
-
-        const data = await response.json();
-
-        if (data.status === "success") {
-          status.innerText = "Model generated successfully!";
-          
-          const byteCharacters = atob(data.model);
-          const byteNumbers = new Array(byteCharacters.length);
-          for (let i = 0; i < byteCharacters.length; i++) {
-            byteNumbers[i] = byteCharacters.charCodeAt(i);
-          }
-          const byteArray = new Uint8Array(byteNumbers);
-          const blob = new Blob([byteArray], { type: "model/gltf-binary" });
-          const blobUrl = URL.createObjectURL(blob);
-
-          viewer.src = blobUrl;
-          viewer.style.display = "block";
-        } else {
-          status.innerText = "Error: " + (data.message || "Generation failed.");
-          btn.disabled = false;
+                    const previewImg = document.getElementById("preview-img");
+                    previewImg.src = selectedBase64;
+                    previewImg.style.display = "block";
+                    document.getElementById("uploadText").style.display = "none";
+                    document.getElementById("generateBtn").disabled = false;
+                };
+                img.src = e.target.result;
+            };
+            reader.readAsDataURL(file);
         }
-      } catch (err) {
-        status.innerText = "Failed to connect to backend: " + err.message;
-        btn.disabled = false;
-      }
-    }
-  </script>
+
+        async function generate3D() {
+            const btn = document.getElementById("generateBtn");
+            const status = document.getElementById("status");
+            const viewer = document.getElementById("viewer");
+
+            btn.disabled = true;
+            status.innerText = "Processing image on GPU (takes ~5-10 seconds)...";
+            viewer.style.display = "none";
+
+            try {
+                const response = await fetch(MODAL_ENDPOINT, {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ image: selectedBase64 })
+                });
+
+                const data = await response.json();
+
+                if (data.status === "success") {
+                    status.innerText = "Model generated successfully!";
+                    btn.disabled = false;
+
+                    const byteCharacters = atob(data.model);
+                    const byteNumbers = new Array(byteCharacters.length);
+                    for (let i = 0; i < byteCharacters.length; i++) {
+                        byteNumbers[i] = byteCharacters.charCodeAt(i);
+                    }
+                    const byteArray = new Uint8Array(byteNumbers);
+                    const blob = new Blob([byteArray], { type: "model/gltf-binary" });
+                    const blobUrl = URL.createObjectURL(blob);
+
+                    viewer.src = blobUrl;
+                    viewer.style.display = "block";
+                } else {
+                    status.innerText = "Error: " + (data.message || "Generation failed.");
+                    btn.disabled = false;
+                }
+            } catch (err) {
+                status.innerText = "Failed to connect to backend: " + err.message;
+                btn.disabled = false;
+            }
+        }
+    </script>
 </body>
 </html>
