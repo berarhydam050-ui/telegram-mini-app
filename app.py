@@ -27,17 +27,17 @@ image = (
         "torchvision==0.19.0",
         index_url="https://download.pytorch.org/whl/cu121",
     )
+    # 1. Use .workdir() instead of mkdir/cd. This creates /app and enters it.
+    .workdir("/app")
+    .run_commands("git clone https://github.com/Stability-AI/stable-fast-3d.git")
+    
+    # 2. Enter the cloned repo directory
+    .workdir("/app/stable-fast-3d")
+    
+    # 3. Run the filtering and installation commands linearly (no multiline raw strings)
     .run_commands(
-        "mkdir -p /app && cd /app && git clone"
-        " https://github.com/Stability-AI/stable-fast-3d.git"
-    )
-    .run_commands(
-        r"""
-        cd /app/stable-fast-3d && \
-        grep -v '^./texture_baker/' requirements.txt | \
-        grep -v '^./uv_unwrapper/' > /tmp/sf3d_requirements.txt && \
-        pip install -r /tmp/sf3d_requirements.txt
-    """
+        "grep -v '^./texture_baker/' requirements.txt | grep -v '^./uv_unwrapper/' > /tmp/sf3d_requirements.txt",
+        "pip install -r /tmp/sf3d_requirements.txt",
     )
     .env(
         {
@@ -48,28 +48,9 @@ image = (
             "USE_NATIVE_ARCH": "0",
         }
     )
-    .run_commands(
-        r"""
-        cd /app/stable-fast-3d && \
-        CUDA_HOME=/usr/local/cuda \
-        TORCH_CUDA_ARCH_LIST=8.6 \
-        MAX_JOBS=2 \
-        USE_CUDA=1 \
-        USE_NATIVE_ARCH=0 \
-        pip install ./texture_baker/ --no-build-isolation
-    """
-    )
-    .run_commands(
-        r"""
-        cd /app/stable-fast-3d && \
-        CUDA_HOME=/usr/local/cuda \
-        TORCH_CUDA_ARCH_LIST=8.6 \
-        MAX_JOBS=2 \
-        USE_CUDA=1 \
-        USE_NATIVE_ARCH=0 \
-        pip install ./uv_unwrapper/ --no-build-isolation
-    """
-    )
+    # 4. Install the submodules
+    .run_commands("pip install ./texture_baker/ --no-build-isolation")
+    .run_commands("pip install ./uv_unwrapper/ --no-build-isolation")
     .pip_install(
         "fastapi",
         "uvicorn",
