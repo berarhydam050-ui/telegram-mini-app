@@ -123,7 +123,6 @@ class SF3DModel:
     self.model.eval()
     print("PIPELINE ENGINE READY")
 
-  # ✨ Exposes this class method cleanly to web requests matching your frontend layout
   @modal.fastapi_endpoint(method="POST")
   def generate(self, item: dict):
     import base64
@@ -140,7 +139,6 @@ class SF3DModel:
     texture_resolution = item.get("texture_resolution", 1024)
     remesh_option = item.get("remesh", "triangle")
 
-    # Clean the Base64 input string array data safely
     if "," in image_base64:
       image_base64 = image_base64.split(",", 1)[1]
 
@@ -154,7 +152,7 @@ class SF3DModel:
     except Exception as e:
       return {"error": f"Failed to extract bitmap from data stream: {e}"}
 
-    # ✨ FIXED RESOLUTION SYNTAX ERROR LIST
+    #  FIXED RESOLUTION SYNTAX CHECK
     if texture_resolution not in:
       texture_resolution = 1024
       
