@@ -2,8 +2,6 @@ import os
 import sys
 import types
 import modal
-from fastapi import FastAPI, Request
-from fastapi.middleware.cors import CORSMiddleware
 
 image = modal.Image.from_registry(
     "rhydam12/sf3d-gpu-worker:latest",
@@ -13,14 +11,6 @@ image = modal.Image.from_registry(
 app = modal.App("sf3d-backend")
 models_volume = modal.Volume.from_name("sf3d-models-volume", create_if_missing=True)
 
-web_app = FastAPI()
-web_app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
 
 @app.cls(
     image=image,
@@ -40,9 +30,6 @@ class SF3DModel:
 
     print("STARTING BACKEND INFRASTRUCTURE INITIALIZATION")
 
-    # ------------------------------------------------------------
-    # DYNAMIC DECORATOR FIX FOR 'device_type' KEYWORD ERROR
-    # ------------------------------------------------------------
     def safe_custom_fwd(*args, **kwargs):
         kwargs.pop("device_type", None)
         return torch.cuda.amp.custom_fwd(*args, **kwargs)
@@ -191,6 +178,18 @@ class SF3DModel:
 @app.function(image=image)
 @modal.asgi_app()
 def generate():
+    from fastapi import FastAPI, Request
+    from fastapi.middleware.cors import CORSMiddleware
+
+    web_app = FastAPI()
+    web_app.add_middleware(
+        CORSMiddleware,
+        allow_origins=["*"],
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
+
     @web_app.post("/")
     async def run_generate(request: Request):
         data = await request.json()
@@ -198,4 +197,4 @@ def generate():
         return model_instance.process_image.remote(data)
 
     return web_app
-        
+    
