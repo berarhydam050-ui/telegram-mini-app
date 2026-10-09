@@ -1,333 +1,423 @@
+
 import base64
 import binascii
 import io
+import inspect
 import os
 import re
 import sys
+import textwrap
+import threading
 import traceback
+from typing import Any
 
 import modal
 
 
-# ---------------------------------------------------------
+# ============================================================
 # 1. MODAL CONFIGURATION
-# ---------------------------------------------------------
+# ============================================================
 
-IMAGE_NAME = "rhydam12/sf3d-gpu-worker:latest"
+APP_NAME = "sf3d-backend"
+VOLUME_NAME = "sf3d-models-volume"
 CACHE_DIR = "/root/.cache"
 
-image = modal.Image.from_registry(
-    IMAGE_NAME,
-    add_python="3.10",
-)
+MODEL_ID = "stabilityai/stable-fast-3d"
+GPU_DEVICE = "cuda:0"
 
-app = modal.App("sf3d-backend")
+DEFAULT_TEXTURE_RESOLUTION = 2048
+MAX_IMAGE_PIXELS = 40_000_000
+FOREGROUND_SCALE = 0.85
+
+# Set to "quad" only if the installed SF3D implementation
+# supports this remeshing mode.
+REMESH_MODE = os.environ.get("SF3D_REMESH_MODE", "quad")
+
+app = modal.App(APP_NAME)
 
 models_volume = modal.Volume.from_name(
-    "sf3d-models-volume",
+    VOLUME_NAME,
     create_if_missing=True,
 )
 
+# Reuse the prebuilt image containing SF3D and its native
+# dependencies. Do not reinstall texture_baker or uv_unwrapper
+# here: these dependencies can require native compilation.
+image = modal.Image.from_registry(
+    "rhydam12/sf3d-gpu-worker:latest",
+    add_python="3.10",
+)
 
-# ---------------------------------------------------------
-# 2. PATCH THE SF3D DEVICE MISMATCH (DYNAMIC PATH)
-# ---------------------------------------------------------
+# Experimental GPU snapshot support is platform/version
+# dependent. If Modal rejects this option, consult its current
+# GPU snapshot API instead of silently disabling snapshots.
 
-def patch_sf3d_source():
+
+# ============================================================
+# 2. IMAGE DECODING AND PREPROCESSING
+# ============================================================
+
+def decode_image(data: Any):
+    """Decode base64 input safely and normalize EXIF orientation."""
+    from PIL import Image, ImageOps
+
+    if isinstance(data, dict):
+        data = (
+            data.get("image")
+            or data.get("image_base64")
+            or data.get("imageBase64")
+        )
+
+    if not isinstance(data, str) or not data.strip():
+        raise ValueError("Provide an image as a base64 string.")
+
+    # Accept both raw base64 and data:image/...;base64,... input.
+    if data.startswith("data:"):
+        header, separator, data = data.partition(",")
+        if not separator or ";base64" not in header.lower():
+            raise ValueError("Invalid base64 data URI.")
+
+    # Reject excessively large encoded input before decoding.
+    if len(data) > 180_000_000:
+        raise ValueError("Encoded image exceeds the input limit.")
+
+    try:
+        raw = base64.b64decode(data, validate=True)
+    except (binascii.Error, ValueError) as exc:
+        raise ValueError("Invalid base64 image data.") from exc
+
+    if not raw:
+        raise ValueError("The uploaded image is empty.")
+
+    try:
+        with Image.open(io.BytesIO(raw)) as source:
+            width, height = source.size
+
+            if width <= 0 or height <= 0:
+                raise ValueError("Invalid image dimensions.")
+
+            if width * height > MAX_IMAGE_PIXELS:
+                raise ValueError("Image exceeds the 40-megapixel limit.")
+
+            source.load()
+            result = ImageOps.exif_transpose(source).convert("RGBA")
+    except ValueError:
+        raise
+    except Exception as exc:
+        raise ValueError("Could not decode the uploaded image.") from exc
+
+    return result
+
+
+def remove_background_and_center(image):
+    """Remove the background and fit the foreground on a square canvas."""
+    from PIL import Image
+
+    from rembg import new_session, remove
+
+    # This function is normally called on the worker's persistent
+    # rembg session. The fallback supports standalone use.
+    session = getattr(remove_background_and_center, "_session", None)
+
+    if session is None:
+        session = new_session("u2net")
+        remove_background_and_center._session = session
+
+    rgba = remove(image, session=session).convert("RGBA")
+    alpha = rgba.getchannel("A")
+    bbox = alpha.getbbox()
+
+    if bbox is None:
+        raise ValueError("No foreground subject was detected.")
+
+    foreground = rgba.crop(bbox)
+
+    # A square transparent canvas, with the foreground scaled
+    # to occupy 85% of the canvas's longest dimension.
+    side = max(foreground.width, foreground.height)
+    target_side = max(1, int(side * FOREGROUND_SCALE))
+
+    scale = target_side / max(foreground.width, foreground.height)
+    new_size = (
+        max(1, int(foreground.width * scale)),
+        max(1, int(foreground.height * scale)),
+    )
+
+    foreground = foreground.resize(
+        new_size,
+        Image.Resampling.LANCZOS,
+    )
+
+    canvas_side = max(new_size)
+    canvas = Image.new("RGBA", (canvas_side, canvas_side), (0, 0, 0, 0))
+
+    position = (
+        (canvas_side - foreground.width) // 2,
+        (canvas_side - foreground.height) // 2,
+    )
+    canvas.alpha_composite(foreground, dest=position)
+
+    return canvas
+
+
+# ============================================================
+# 3. DYNAMIC SF3D CUDA SOURCE PATCH
+# ============================================================
+
+_PATCH_LOCK = threading.Lock()
+_PATCHED_METHODS = []
+
+
+def patch_query_triplane():
     """
-    Dynamically locate sf3d package and patch query_triplane() 
-    to prevent device mismatch (cpu vs cuda:0) during grid_sample().
+    Patch the installed SF3D query_triplane implementation.
+
+    Insert:
+        positions = positions.to(device=triplanes.device)
+
+    immediately before its grid-sampling operation.
+
+    This intentionally fails loudly if the installed source has
+    changed, rather than claiming a patch succeeded when it did not.
     """
-    import sf3d
-    system_path = os.path.join(
-        os.path.dirname(sf3d.__file__),
-        "system.py",
-    )
+    import sf3d.system as system_module
 
-    if not os.path.isfile(system_path):
-        raise FileNotFoundError(
-            f"SF3D system.py was not found: {system_path}"
+    with _PATCH_LOCK:
+        for _, method_name, owner in _PATCHED_METHODS:
+            if owner is system_module:
+                return
+
+        owners = []
+
+        for _, cls in inspect.getmembers(system_module, inspect.isclass):
+            method = getattr(cls, "query_triplane", None)
+            if callable(method):
+                owners.append((cls, "query_triplane", method))
+
+        module_function = getattr(system_module, "query_triplane", None)
+        if callable(module_function):
+            owners.append((system_module, "query_triplane", module_function))
+
+        if not owners:
+            # Search other imported SF3D modules as package layouts vary.
+            import sf3d
+            import pkgutil
+            import importlib
+
+            for item in pkgutil.walk_packages(
+                sf3d.__path__, prefix="sf3d."
+            ):
+                try:
+                    mod = importlib.import_module(item.name)
+                except Exception:
+                    continue
+
+                for _, cls in inspect.getmembers(mod, inspect.isclass):
+                    method = getattr(cls, "query_triplane", None)
+                    if callable(method):
+                        owners.append((cls, "query_triplane", method))
+
+        if not owners:
+            raise RuntimeError(
+                "Could not locate query_triplane(). "
+                "The installed SF3D package layout may have changed."
+            )
+
+        patched_count = 0
+
+        for owner, method_name, original in owners:
+            if getattr(original, "_sf3d_cuda_patched", False):
+                patched_count += 1
+                continue
+
+            try:
+                source = inspect.getsource(original)
+                source = textwrap.dedent(source)
+            except (OSError, TypeError):
+                continue
+
+            if "positions = positions.to(device=triplanes.device)" in source:
+                original._sf3d_cuda_patched = True
+                patched_count += 1
+                continue
+
+            lines = source.splitlines()
+            output = []
+            inserted = False
+
+            for line in lines:
+                # Insert immediately before the actual sampling call.
+                if (
+                    not inserted
+                    and "grid_sample(" in line
+                    and "positions" in source
+                    and "triplanes" in source
+                ):
+                    indent = line[:len(line) - len(line.lstrip())]
+                    output.append(
+                        indent
+                        + "positions = positions.to(device=triplanes.device)"
+                    )
+                    inserted = True
+
+                output.append(line)
+
+            if not inserted:
+                continue
+
+            patched_source = "\n".join(output) + "\n"
+
+            namespace = getattr(original, "__globals__", {})
+            namespace = dict(namespace)
+
+            try:
+                exec(
+                    compile(
+                        patched_source,
+                        inspect.getsourcefile(original) or "<sf3d-patch>",
+                        "exec",
+                    ),
+                    namespace,
+                )
+
+                replacement = namespace[method_name]
+                replacement._sf3d_cuda_patched = True
+
+                if inspect.ismethod(original):
+                    replacement = replacement.__get__(
+                        owner, owner if inspect.isclass(owner) else type(owner)
+                    )
+
+                setattr(owner, method_name, replacement)
+                patched_count += 1
+
+            except Exception as exc:
+                raise RuntimeError(
+                    f"Failed to patch {owner}.{method_name}"
+                ) from exc
+
+        if patched_count == 0:
+            raise RuntimeError(
+                "query_triplane() was found, but its source could not "
+                "be safely patched. Inspect the installed implementation."
+            )
+
+        _PATCHED_METHODS.append(
+            (system_module.__name__, "query_triplane", system_module)
         )
 
-    with open(system_path, "r", encoding="utf-8") as file:
-        source = file.read()
 
-    marker = "# Modal device-sync fix"
-    if marker in source:
-        print("SF3D device-sync patch already present.")
-        return
-
-    function_match = re.search(
-        r"(?m)^([ \t]*)def query_triplane\(",
-        source,
-    )
-
-    if not function_match:
-        raise RuntimeError(
-            "Could not find query_triplane() in system.py. "
-            "Inspect the installed SF3D source before deploying."
-        )
-
-    start = function_match.start()
-    next_function = re.search(
-        r"(?m)^([ \t]*)def ",
-        source[function_match.end():],
-    )
-
-    end = (
-        function_match.end() + next_function.start()
-        if next_function
-        else len(source)
-    )
-
-    function_source = source[start:end]
-
-    pattern = re.compile(
-        r"(?m)^([ \t]*)positions\s*=\s*scale_tensor\("
-    )
-
-    if not pattern.search(function_source):
-        raise RuntimeError(
-            "The query_triplane() source layout differs from "
-            "the expected version. No patch was applied."
-        )
-
-    function_source = pattern.sub(
-        lambda match: (
-            match.group(1)
-            + marker
-            + "\n"
-            + match.group(1)
-            + "positions = positions.to(device=triplanes.device)\n"
-            + match.group(1)
-            + "positions = scale_tensor("
-        ),
-        function_source,
-        count=1,
-    )
-
-    source = (
-        source[:start]
-        + function_source
-        + source[end:]
-    )
-
-    with open(system_path, "w", encoding="utf-8") as file:
-        file.write(source)
-
-    print("Applied SF3D query_triplane device-sync patch.")
-
-
-# ---------------------------------------------------------
-# 3. SF3D MODEL WORKER
-# ---------------------------------------------------------
+# ============================================================
+# 4. MODAL SF3D WORKER
+# ============================================================
 
 @app.cls(
     image=image,
     gpu="A10G",
-    timeout=900,
-    startup_timeout=900,
+    volumes={CACHE_DIR: models_volume},
     scaledown_window=2,
     enable_memory_snapshot=True,
-    experimental_options={
-        "enable_gpu_snapshot": True,
-    },
-    secrets=[
-        modal.Secret.from_name("huggingface-secret"),
-    ],
-    volumes={
-        CACHE_DIR: models_volume,
-    },
+    experimental_options={"enable_gpu_snapshot": True},
+    timeout=900,
+    max_containers=5,
 )
-class SF3DModel:
+class SF3DWorker:
 
     @modal.enter(snap=True)
     def load_model(self):
         import torch
-        from huggingface_hub import login
-        from rembg import new_session
-
-        print("Initializing SF3D worker.")
 
         if not torch.cuda.is_available():
-            raise RuntimeError(
-                "CUDA is unavailable. Check the Modal GPU configuration."
-            )
+            raise RuntimeError("CUDA is unavailable in the worker.")
 
-        # Apply the patch dynamically based on the installed package path.
-        patch_sf3d_source()
+        self.device = torch.device(GPU_DEVICE)
 
-        token = (
-            os.environ.get("HF_TOKEN")
-            or os.environ.get("HUGGINGFACE_TOKEN")
-        )
-
-        if not token:
-            raise RuntimeError(
-                "HF_TOKEN is missing. Add it to the "
-                "'huggingface-secret' Modal secret."
-            )
-
-        login(token=token)
-
-        print("Initializing background-removal session.")
-        self.rembg_session = new_session("u2net")
+        # Patch before loading the model so inference uses the
+        # corrected sampling function.
+        patch_query_triplane()
 
         from sf3d.system import SF3D
+        from rembg import new_session
 
-        print("Loading Stability AI SF3D model.")
-        self.device = torch.device("cuda:0")
-
-        self.model = SF3D.from_pretrained(
-            "stabilityai/stable-fast-3d",
-            config_name="config.yaml",
-            weight_name="model.safetensors",
-        )
-
-        self.model.to(self.device)
+        self.model = SF3D.from_pretrained(MODEL_ID)
         self.model.eval()
-
-        torch.cuda.synchronize()
-        models_volume.commit()
-
-        print("SF3D model initialization complete.")
-
-    # -----------------------------------------------------
-    # 4. REVALIDATE DEVICE PLACEMENT BEFORE EACH REQUEST
-    # -----------------------------------------------------
-
-    def _enforce_cuda(self):
-        import torch
-
-        if not torch.cuda.is_available():
-            raise RuntimeError(
-                "CUDA is unavailable during inference."
-            )
-
-        self.device = torch.device("cuda:0")
         self.model.to(self.device)
 
-        for name, parameter in self.model.named_parameters():
-            if parameter.device != self.device:
-                parameter.data = parameter.data.to(self.device)
+        # Cache the background-removal session.
+        remove_background_and_center._session = new_session("u2net")
 
-        for name, buffer in self.model.named_buffers():
-            if buffer.device != self.device:
-                buffer.data = buffer.data.to(self.device)
-
-        torch.cuda.synchronize()
-
-    # -----------------------------------------------------
-    # 5. IMAGE DECODING AND VALIDATION
-    # -----------------------------------------------------
-
-    @staticmethod
-    def _decode_image(item):
-        from PIL import Image, ImageOps
-
-        if not isinstance(item, dict):
-            raise ValueError("The request body must be a JSON object.")
-
-        encoded = item.get("image")
-
-        if not isinstance(encoded, str) or not encoded.strip():
-            raise ValueError(
-                "The 'image' field must contain a base64 image."
-            )
-
-        encoded = encoded.strip()
-        encoded = re.sub(
-            r"^data:image/[^;]+;base64,",
-            "",
-            encoded,
-            flags=re.IGNORECASE,
-        )
-        encoded = re.sub(r"\s+", "", encoded)
-
-        try:
-            raw = base64.b64decode(encoded, validate=True)
-        except (binascii.Error, ValueError) as exc:
-            raise ValueError(
-                "The image field contains invalid base64."
-            ) from exc
-
-        if not raw:
-            raise ValueError("The decoded image is empty.")
-
-        try:
-            with Image.open(io.BytesIO(raw)) as source:
-                source = ImageOps.exif_transpose(source)
-                source.load()
-                result = source.convert("RGBA")
-        except Exception as exc:
-            raise ValueError(
-                "The decoded content is not a valid image."
-            ) from exc
-
-        if result.width * result.height > 40_000_000:
-            raise ValueError(
-                "The image is too large. Maximum: 40 megapixels."
-            )
-
-        return result
-
-    # -----------------------------------------------------
-    # 6. IMAGE-TO-3D INFERENCE
-    # -----------------------------------------------------
-
-    @modal.method()
-    def process_image(self, item: dict):
-        import torch
-        from sf3d.utils import (
-            remove_background,
-            resize_foreground,
-        )
-
-        image = self._decode_image(item)
-        resolution = item.get("texture_resolution", 2048)
-
-        if (
-            isinstance(resolution, bool)
-            or not isinstance(resolution, int)
-            or resolution not in (512, 1024, 2048)
-        ):
-            raise ValueError(
-                "'texture_resolution' must be 512, 1024, or 2048."
-            )
-
-        remesh_option = item.get("remesh", "quad")
-
-        if remesh_option not in ("none", "triangle", "quad"):
-            raise ValueError(
-                "'remesh' must be 'none', 'triangle', or 'quad'."
-            )
-
-        remesh = (
-            None if remesh_option == "none"
-            else remesh_option
-        )
+        # Persist downloaded model/cache artifacts in the volume.
+        models_volume.commit()
 
         self._enforce_cuda()
 
-        image = remove_background(
-            image,
-            self.rembg_session,
-        )
+        # Warm up is intentionally omitted: snapshotting CUDA state
+        # requires validation against your Modal and PyTorch versions.
+        torch.cuda.synchronize(self.device)
 
-        bbox = image.getbbox()
+    def _enforce_cuda(self, *inputs):
+        """
+        Recheck device placement before each inference.
 
-        if bbox is None:
-            raise ValueError(
-                "Background removal returned an empty image."
-            )
+        Moving all parameters on every request can be expensive.
+        Normally this is a no-op after the first successful placement.
+        """
+        import torch
 
-        image = image.crop(bbox)
-        image = resize_foreground(image, 0.85)
+        if not torch.cuda.is_available():
+            raise RuntimeError("CUDA is unavailable after worker startup.")
 
-        print(
-            f"Starting SF3D inference: "
-            f"resolution={resolution}, remesh={remesh_option}"
-        )
+        device = torch.device(GPU_DEVICE)
+
+        if self.device != device:
+            self.device = device
+
+        # Restore model placement after a container resume.
+        self.model.to(device)
+
+        # Validate parameters and buffers rather than assuming .to()
+        # has repaired every custom CUDA extension.
+        for name, parameter in self.model.named_parameters():
+            if parameter.device != device:
+                raise RuntimeError(
+                    f"Parameter {name} remains on {parameter.device}"
+                )
+
+        for name, buffer in self.model.named_buffers():
+            if buffer.device != device:
+                raise RuntimeError(
+                    f"Buffer {name} remains on {buffer.device}"
+                )
+
+        def check_input(value, name="input"):
+            if torch.is_tensor(value) and value.device.type != "cuda":
+                raise RuntimeError(
+                    f"{name} is on {value.device}; expected CUDA."
+                )
+
+            if isinstance(value, dict):
+                for key, item in value.items():
+                    check_input(item, f"{name}.{key}")
+            elif isinstance(value, (tuple, list)):
+                for index, item in enumerate(value):
+                    check_input(item, f"{name}[{index}]")
+
+        for index, value in enumerate(inputs):
+            check_input(value, f"input[{index}]")
+
+        torch.cuda.synchronize(device)
+
+    @modal.method()
+    def process_image(self, data):
+        import torch
+
+        from PIL import Image
+
+        # Decode and preprocess outside inference mode.
+        original = decode_image(data)
+        processed = remove_background_and_center(original)
+
+        self._enforce_cuda()
 
         try:
             with torch.inference_mode():
@@ -335,124 +425,97 @@ class SF3DModel:
                     device_type="cuda",
                     dtype=torch.bfloat16,
                 ):
-                    mesh, glob_dict = self.model.run_image(
-                        image,
-                        bake_resolution=resolution,
-                        remesh=remesh,
+                    # SF3D's public run_image API varies by release.
+                    # These options must match the installed version.
+                    mesh, _ = self.model.run_image(
+                        processed,
+                        bake_resolution=DEFAULT_TEXTURE_RESOLUTION,
+                        remesh=REMESH_MODE,
                     )
 
-            torch.cuda.synchronize()
+            self._enforce_cuda()
+
+            output = io.BytesIO()
+            mesh.export(output, file_type="glb")
+            glb_bytes = output.getvalue()
+
+            if not glb_bytes:
+                raise RuntimeError("SF3D returned an empty GLB.")
+
+            encoded = base64.b64encode(glb_bytes).decode("ascii")
+
+            return {
+                "success": True,
+                "format": "glb",
+                "mime_type": "model/gltf-binary",
+                "model_base64": encoded,
+                "texture_resolution": DEFAULT_TEXTURE_RESOLUTION,
+                "remesh": REMESH_MODE,
+            }
 
         except Exception:
-            print("SF3D inference traceback:")
             traceback.print_exc()
             raise
 
-        if mesh is None:
-            raise RuntimeError("SF3D returned no mesh.")
 
-        if len(mesh.vertices) == 0:
-            raise RuntimeError("SF3D returned an empty mesh.")
+# ============================================================
+# 5. FASTAPI ASGI WEBHOOK
+# ============================================================
 
-        output_path = "/tmp/output.glb"
+from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel, Field
 
-        try:
-            mesh.export(
-                output_path,
-                file_type="glb",
-                include_normals=True,
-            )
+web_app = FastAPI(title="SF3D Image-to-3D API")
 
-            with open(output_path, "rb") as file:
-                glb_bytes = file.read()
-
-            if not glb_bytes:
-                raise RuntimeError("The exported GLB file is empty.")
-
-            return {
-                "model": base64.b64encode(
-                    glb_bytes
-                ).decode("ascii")
-            }
-
-        finally:
-            if os.path.exists(output_path):
-                os.remove(output_path)
+web_app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=False,
+    allow_methods=["POST", "GET", "OPTIONS"],
+    allow_headers=["*"],
+)
 
 
-# ---------------------------------------------------------
-# 7. FASTAPI WEBHOOK
-# ---------------------------------------------------------
+class GenerateRequest(BaseModel):
+    image: str = Field(
+        ...,
+        description="Base64 image or data:image/...;base64 URI",
+    )
+
+
+@web_app.get("/health")
+async def health():
+    return {
+        "status": "ok",
+        "service": APP_NAME,
+        "model": MODEL_ID,
+    }
+
+
+@web_app.post("/generate")
+async def generate(request: GenerateRequest):
+    try:
+        result = await SF3DWorker().process_image.remote.aio(
+            {"image": request.image}
+        )
+        return result
+
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    except Exception as exc:
+        traceback.print_exc()
+        raise HTTPException(
+            status_code=500,
+            detail=f"SF3D generation failed: {type(exc).__name__}: {exc}",
+        ) from exc
+
 
 @app.function(
     image=image,
-    timeout=900,
+    scaledown_window=2,
 )
 @modal.asgi_app()
-def generate():
-    from fastapi import FastAPI, HTTPException, Request
-    from fastapi.middleware.cors import CORSMiddleware
-
-    web_app = FastAPI(
-        title="SF3D Backend",
-        version="1.0.0",
-    )
-
-    web_app.add_middleware(
-        CORSMiddleware,
-        allow_origins=["*"],
-        allow_credentials=False,
-        allow_methods=["GET", "POST", "OPTIONS"],
-        allow_headers=["*"],
-    )
-
-    @web_app.get("/")
-    async def health():
-        return {
-            "status": "ok",
-            "service": "sf3d-backend",
-        }
-
-    @web_app.post("/")
-    async def run_generate(request: Request):
-        try:
-            data = await request.json()
-        except Exception as exc:
-            raise HTTPException(
-                status_code=400,
-                detail="Request body must be valid JSON.",
-            ) from exc
-
-        if not isinstance(data, dict):
-            raise HTTPException(
-                status_code=400,
-                detail="Request JSON must be an object.",
-            )
-
-        try:
-            model_instance = SF3DModel()
-            result = await model_instance.process_image.remote.aio(
-                data
-            )
-            return result
-
-        except ValueError as exc:
-            raise HTTPException(
-                status_code=400,
-                detail=str(exc),
-            ) from exc
-
-        except Exception as exc:
-            print("SF3D request failed:")
-            traceback.print_exc()
-
-            raise HTTPException(
-                status_code=500,
-                detail=(
-                    "3D generation failed. Open the Modal "
-                    "SF3DModel function logs for the traceback."
-                ),
-            ) from exc
-
+def fastapi_app():
     return web_app
-    
