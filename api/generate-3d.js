@@ -1,5 +1,4 @@
 export default async function handler(req, res) {
-  // CORS Headers for Telegram Mini App
   res.setHeader('Access-Control-Allow-Credentials', 'true');
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET,OPTIONS,POST');
@@ -13,9 +12,9 @@ export default async function handler(req, res) {
     return res.status(405).json({ success: false, error: 'Method Not Allowed' });
   }
 
-  // Load Modal API URL from Vercel environment variables
   const modalUrl = process.env.MODAL_API_URL;
   if (!modalUrl) {
+    console.error('Missing MODAL_API_URL environment variable');
     return res.status(500).json({ success: false, error: 'Missing MODAL_API_URL environment variable on Vercel' });
   }
 
@@ -27,7 +26,8 @@ export default async function handler(req, res) {
       return res.status(400).json({ success: false, error: 'No image provided in request body' });
     }
 
-    // Call Modal Backend API
+    console.log('Forwarding generation request to Modal GPU backend...');
+
     const response = await fetch(modalUrl, {
       method: 'POST',
       headers: {
@@ -43,17 +43,18 @@ export default async function handler(req, res) {
     const data = await response.json();
 
     if (!response.ok) {
+      console.error('Modal execution error:', data);
       return res.status(response.status).json({ success: false, error: data.error || 'Modal rejected the request' });
     }
 
-    // Return the successful result to your Telegram Mini App frontend
+    console.log('3D Model generated successfully via Modal.');
     return res.status(200).json({
       success: true,
       model: data.model || data
     });
 
   } catch (error) {
-    console.error('Generate 3D Handler Error:', error);
+    console.error('Generate 3D Handler Exception:', error);
     return res.status(500).json({ success: false, error: error.message });
   }
 }
