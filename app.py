@@ -93,9 +93,8 @@ def remove_background_and_center(image):
     image=image,
     gpu="A10G",
     volumes={CACHE_DIR: models_volume},
-    scaledown_window=15,          # Keeps warm for 15 mins after first use
-    enable_memory_snapshot=True,  # CPU snapshot ON
-    # Notice: GPU snapshot is intentionally REMOVED here
+    scaledown_window=15,          
+    enable_memory_snapshot=True,  
     secrets=[modal.Secret.from_name("huggingface-secret")],
     timeout=900,
     max_containers=5,
@@ -112,7 +111,7 @@ class SF3DModel:
 
         print("--- STARTING CPU MEMORY SNAPSHOT ---")
         
-        # 1. Blind PyTorch to CUDA so SF3D doesn't crash trying to find a GPU
+        # 1. Blind PyTorch to CUDA so SF3D doesn't crash trying to find a GPU during build
         self._orig_cuda_available = torch.cuda.is_available
         torch.cuda.is_available = lambda: False
         torch.set_default_device('cpu')
@@ -148,7 +147,7 @@ class SF3DModel:
         if hf_token:
             login(token=hf_token)
 
-        # 3. Import and load model safely into CPU RAM
+        # 3. Import and load model safely into CPU RAM (Default device is set to CPU)
         if "/app/stable-fast-3d" not in sys.path:
             sys.path.append("/app/stable-fast-3d")
         from sf3d.system import SF3D
@@ -156,15 +155,14 @@ class SF3DModel:
         self.model = SF3D.from_pretrained(
             MODEL_ID,
             config_name="config.yaml",
-            weight_name="model.safetensors",
-            device_map="cpu"
+            weight_name="model.safetensors"
         )
         print("--- CPU MEMORY SNAPSHOT COMPLETE ---")
 
 
     @modal.enter(snap=False)
     def thaw_to_gpu(self):
-        """STEP 2: Runs instantly on Cold Start. Pushes model from RAM to VRAM in ~3 seconds."""
+        """STEP 2: Runs instantly on Cold Start. Pushes model from RAM to VRAM."""
         import torch
         import torch.cuda.amp
         from rembg import new_session
@@ -213,7 +211,6 @@ class SF3DModel:
         import torch
         import torch.cuda.amp
 
-        # Re-enforce AMP patches during execution
         if not hasattr(torch, "amp"):
             torch.amp = types.ModuleType("amp")
         torch.amp.custom_fwd = getattr(torch.cuda.amp, "custom_fwd", torch.amp.custom_fwd)
