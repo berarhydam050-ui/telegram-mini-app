@@ -18,19 +18,20 @@ models_volume = modal.Volume.from_name("sf3d-models-volume", create_if_missing=T
     image=image,
     gpu="A10G",
     timeout=900,
-    scaledown_window=2,  # Shuts down instantly after task completion ($0.00 idle cost)
+    scaledown_window=2,  # Shuts down 2 seconds after task completion ($0.00 idle cost)
+    enable_memory_snapshot=True,
     secrets=[modal.Secret.from_name("huggingface-secret")],
     volumes={"/root/.cache": models_volume},
 )
 class SF3DModel:
 
-  @modal.enter()
+  @modal.enter(snap=True)
   def load_model(self):
     import torch
     import torch.cuda.amp
     from huggingface_hub import login
 
-    print("STARTING STABLE BACKEND INITIALIZATION")
+    print("STARTING INITIALIZATION FOR SNAPSHOT CACHE")
 
     # 1. Patch PyTorch AMP custom_fwd / custom_bwd kwargs
     def safe_custom_fwd(*args, **kwargs):
@@ -112,7 +113,7 @@ def cpu_safe_wrapper(fn):
     sys.path.append("/app/stable-fast-3d")
     from sf3d.system import SF3D
 
-    print("Loading network weights from mounted Volume...")
+    print("Loading network weights into memory for snapshotting...")
     self.model = SF3D.from_pretrained(
         "stabilityai/stable-fast-3d",
         config_name="config.yaml",
@@ -121,7 +122,7 @@ def cpu_safe_wrapper(fn):
     device = "cuda" if torch.cuda.is_available() else "cpu"
     self.model.to(device)
     self.model.eval()
-    print("PIPELINE ENGINE READY")
+    print("SNAPSHOT PREPARATION COMPLETE")
 
   @modal.method()
   def process_image(self, item: dict):
@@ -186,8 +187,15 @@ def cpu_safe_wrapper(fn):
     elif remesh_option == "quad":
       remesh = "quad"
 
-    device = "cuda" if torch.cuda.is_available() else "cpu"
+    # DEEP CUDA SWEEP: Force all parameters & buffers to CUDA after snapshot wake
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     self.model.to(device)
+    for param in self.model.parameters():
+        if param.device != device:
+            param.data = param.data.to(device)
+    for buffer in self.model.buffers():
+        if buffer.device != device:
+            buffer.data = buffer.data.to(device)
 
     print("Running tensor inference forward pass cycle...")
     with torch.inference_mode():
@@ -228,4 +236,4 @@ def generate():
         return await model_instance.process_image.remote.aio(data)
 
     return web_app
-    
+        
