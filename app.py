@@ -30,6 +30,7 @@ class SF3DModel:
 
     print("STARTING BACKEND INFRASTRUCTURE INITIALIZATION")
 
+    # 1. Patch PyTorch AMP custom_fwd / custom_bwd kwargs
     def safe_custom_fwd(*args, **kwargs):
         kwargs.pop("device_type", None)
         return torch.cuda.amp.custom_fwd(*args, **kwargs)
@@ -53,6 +54,34 @@ class SF3DModel:
       code = code.replace("device_type='cuda'", '')
       with open(network_path, "w") as f:
         f.write(code)
+
+    # 2. Patch texture_baker C++ rasterize to run safely on CPU
+    baker_path = "/opt/conda/lib/python3.10/site-packages/texture_baker/baker.py"
+    if os.path.exists(baker_path):
+      with open(baker_path, "r") as f:
+        baker_code = f.read()
+      if "cpu_safe_wrapper" not in baker_code:
+        patch_header = """import torch
+
+def cpu_safe_wrapper(fn):
+    def wrapper(*args, **kwargs):
+        args_cpu = [a.cpu() if isinstance(a, torch.Tensor) else a for a in args]
+        kwargs_cpu = {k: (v.cpu() if isinstance(v, torch.Tensor) else v) for k, v in kwargs.items()}
+        res = fn(*args_cpu, **kwargs_cpu)
+        if isinstance(res, torch.Tensor):
+            return res.cuda()
+        if isinstance(res, (tuple, list)):
+            return type(res)(x.cuda() if isinstance(x, torch.Tensor) else x for x in res)
+        return res
+    return wrapper
+
+"""
+        baker_code = patch_header + baker_code.replace(
+            "torch.ops.texture_baker_cpp.rasterize",
+            "cpu_safe_wrapper(torch.ops.texture_baker_cpp.rasterize)"
+        )
+        with open(baker_path, "w") as f:
+          f.write(baker_code)
 
     hf_token = os.environ.get("HF_TOKEN")
     if not hf_token:
