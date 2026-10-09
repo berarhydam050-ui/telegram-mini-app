@@ -20,6 +20,11 @@ image = (
         "libgl1",
         "libglib2.0-0",
     )
+    # 🚀 STEP 1: Force PyTorch installation at the very beginning to clear container cache errors
+    .run_commands(
+        "pip install torch==2.4.0 torchvision==0.19.0 --index-url https://pytorch.org"
+    )
+    # 🚀 STEP 2: Install the remaining basic Python server requirements
     .pip_install(
         "setuptools==69.5.1",
         "wheel",
@@ -27,10 +32,6 @@ image = (
         "fastapi",
         "uvicorn",
         "python-multipart",
-    )
-    # 🚀 FIXED PYTORCH BUILD BLOCK: Runs standard installation parameters directly
-    .run_commands(
-        "pip install torch==2.4.0 torchvision==0.19.0 --index-url https://pytorch.org"
     )
     .workdir("/app")
     .run_commands("git clone https://github.com")
