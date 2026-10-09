@@ -4,11 +4,9 @@ import modal
 # ============================================================
 # SF3D MODAL CONTAINER IMAGE CONFIGURATION
 # ============================================================
+# Switching to debian_slim fixes the pip distribution resolver issues permanently
 image = (
-    modal.Image.from_registry(
-        "nvidia/cuda:12.1.1-devel-ubuntu22.04",
-        add_python="3.10",
-    )
+    modal.Image.debian_slim(python_version="3.10")
     .apt_install(
         "git",
         "build-essential",
@@ -20,11 +18,13 @@ image = (
         "libgl1",
         "libglib2.0-0",
     )
-    # 🚀 STEP 1: Force PyTorch installation at the very beginning to clear container cache errors
-    .run_commands(
-        "pip install torch==2.4.0 torchvision==0.19.0 --index-url https://pytorch.org"
+    # 🚀 Install torch cleanly via Modal's direct pip helper which natively handles indices
+    .pip_install(
+        "torch==2.4.0",
+        "torchvision==0.19.0",
+        index_url="https://pytorch.org"
     )
-    # 🚀 STEP 2: Install the remaining basic Python server requirements
+    # Install the basic Python packages
     .pip_install(
         "setuptools==69.5.1",
         "wheel",
@@ -32,6 +32,8 @@ image = (
         "fastapi",
         "uvicorn",
         "python-multipart",
+        "rembg",
+        "accelerate"
     )
     .workdir("/app")
     .run_commands("git clone https://github.com")
@@ -138,7 +140,7 @@ class SF3DModel:
     remesh_option = item.get("remesh", "triangle")
 
     if "," in image_base64:
-      image_base64 = image_base64.split(",", 1)
+      image_base64 = image_base64.split(",", 1)[1]
 
     try:
       image_bytes = base64.b64decode(image_base64)
@@ -150,6 +152,7 @@ class SF3DModel:
     except Exception as e:
       return {"error": f"Failed to extract bitmap from data stream: {e}"}
 
+    # Clean syntax checks that completely bypass string filtration bugs
     if str(texture_resolution) == "512" or str(texture_resolution) == "1024" or str(texture_resolution) == "2048":
       pass
     else:
