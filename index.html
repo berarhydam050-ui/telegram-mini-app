@@ -97,7 +97,8 @@
         Telegram.ready();
         Telegram.expand();
 
-        const MODAL_ENDPOINT = "https://berarhydam050--sf3d-backend-api.modal.run/generate";
+        // ✨ FIXED ENDPOINT TARGET: Maps directly to your live running function class link
+        const MODAL_ENDPOINT = "https://berarhydam050--sf3d-backend-sf3dmodel-generate.modal.run";
 
         let selectedBase64 = "";
 
@@ -147,10 +148,16 @@
 
                 const data = await response.json();
 
-                if (data.status === "success") {
-                    status.innerText = "Model generated successfully!";
+                if (data.error) {
+                    status.innerText = "Error: " + data.error;
                     btn.disabled = false;
+                    return;
+                }
 
+                if (data.model) {
+                    status.innerText = "Generation complete! Loading 3D model...";
+                    
+                    // Convert raw base64 data stream back into a real binary blob object
                     const byteCharacters = atob(data.model);
                     const byteNumbers = new Array(byteCharacters.length);
                     for (let i = 0; i < byteCharacters.length; i++) {
@@ -158,16 +165,21 @@
                     }
                     const byteArray = new Uint8Array(byteNumbers);
                     const blob = new Blob([byteArray], { type: "model/gltf-binary" });
-                    const blobUrl = URL.createObjectURL(blob);
-
-                    viewer.src = blobUrl;
+                    
+                    // Create an explicit locally accessible DOM URL for model-viewer to display
+                    const modelUrl = URL.createObjectURL(blob);
+                    
+                    viewer.src = modelUrl;
                     viewer.style.display = "block";
+                    status.innerText = "";
                 } else {
-                    status.innerText = "Error: " + (data.message || "Generation failed.");
-                    btn.disabled = false;
+                    status.innerText = "Failed to retrieve the 3D model asset.";
                 }
-            } catch (err) {
-                status.innerText = "Failed to connect to backend: " + err.message;
+
+            } catch (error) {
+                console.error(error);
+                status.innerText = "Failed to connect to your background GPU instance.";
+            } finally {
                 btn.disabled = false;
             }
         }
