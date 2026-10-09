@@ -123,7 +123,8 @@ class SF3DModel:
     self.model.eval()
     print("PIPELINE ENGINE READY")
 
-  @modal.web_endpoint(method="POST")
+  # ✨ FIXED DECORATOR: Updated to the new Modal syntax requirements
+  @modal.fastapi_endpoint(method="POST")
   def generate(self, item: dict):
     import base64
     import io
@@ -185,4 +186,4 @@ class SF3DModel:
       glb_bytes = f.read()
 
     return {"model": base64.b64encode(glb_bytes).decode("utf-8")}
-    
+      
