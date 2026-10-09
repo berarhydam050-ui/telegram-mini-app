@@ -18,19 +18,21 @@ models_volume = modal.Volume.from_name("sf3d-models-volume", create_if_missing=T
     image=image,
     gpu="A10G",
     timeout=900,
-    scaledown_window=2,  # Shuts down 2 seconds after task completion (zero idle cost)
+    scaledown_window=2,  # Shuts down instantly after task completion ($0.00 idle cost)
+    enable_memory_snapshot=True,
+    experimental_options={"enable_gpu_snapshot": True},
     secrets=[modal.Secret.from_name("huggingface-secret")],
     volumes={"/root/.cache": models_volume},
 )
 class SF3DModel:
 
-  @modal.enter()
+  @modal.enter(snap=True)
   def load_model(self):
     import torch
     import torch.cuda.amp
     from huggingface_hub import login
 
-    print("STARTING BACKEND INFRASTRUCTURE INITIALIZATION")
+    print("STARTING INITIALIZATION FOR SNAPSHOT CACHE")
 
     # 1. Patch PyTorch AMP custom_fwd / custom_bwd kwargs
     def safe_custom_fwd(*args, **kwargs):
@@ -57,7 +59,7 @@ class SF3DModel:
       with open(network_path, "w") as f:
         f.write(code)
 
-    # 2. Patch texture_baker C++ ops (interpolate AND rasterize) to run safely on CPU
+    # 2. Patch texture_baker C++ ops to run safely on CPU
     baker_path = "/opt/conda/lib/python3.10/site-packages/texture_baker/baker.py"
     if os.path.exists(baker_path):
       with open(baker_path, "r") as f:
@@ -100,7 +102,6 @@ def cpu_safe_wrapper(fn):
       from rembg import new_session
       temp_session = new_session() 
       models_volume.commit() 
-      print("Rembg library baseline saved successfully!")
 
     sf3d_path = "/root/.cache/huggingface/hub/models--stabilityai--stable-fast-3d"
     if not os.path.exists(sf3d_path):
@@ -111,12 +112,11 @@ def cpu_safe_wrapper(fn):
           allow_patterns=["*.txt", "*.json", "*.safetensors"]
       )
       models_volume.commit() 
-      print("SF3D system components stored inside your persistent cloud drive folder!")
 
     sys.path.append("/app/stable-fast-3d")
     from sf3d.system import SF3D
 
-    print("Loading network weights locally from mounted Volume disk folder...")
+    print("Loading network weights into memory for snapshotting...")
     self.model = SF3D.from_pretrained(
         "stabilityai/stable-fast-3d",
         config_name="config.yaml",
@@ -125,7 +125,7 @@ def cpu_safe_wrapper(fn):
     device = "cuda" if torch.cuda.is_available() else "cpu"
     self.model.to(device)
     self.model.eval()
-    print("PIPELINE ENGINE READY")
+    print("SNAPSHOT PREPARATION COMPLETE")
 
   @modal.method()
   def process_image(self, item: dict):
@@ -165,13 +165,9 @@ def cpu_safe_wrapper(fn):
 
     try:
       image_bytes = base64.b64decode(image_base64)
-    except Exception as e:
-      return {"error": f"Invalid base64 payload conversion structure: {e}"}
-
-    try:
       image = Image.open(io.BytesIO(image_bytes)).convert("RGBA")
     except Exception as e:
-      return {"error": f"Failed to extract bitmap from data stream: {e}"}
+      return {"error": f"Invalid image payload: {e}"}
 
     if str(texture_resolution) not in ["512", "1024", "2048"]:
       texture_resolution = 1024
@@ -179,16 +175,13 @@ def cpu_safe_wrapper(fn):
     if str(remesh_option) not in ["none", "triangle", "quad"]:
       remesh_option = "quad"
 
-    print("Executing background stripping...")
     session = new_session()
     image = remove_background(image, session)
 
-    # Crop transparent borders for precise framing
     bbox = image.getbbox()
     if bbox:
       image = image.crop(bbox)
 
-    print("Processing boundary resizing coordinates (0.85 ratio)...")
     image = resize_foreground(image, 0.85)
 
     remesh = None
@@ -197,7 +190,6 @@ def cpu_safe_wrapper(fn):
     elif remesh_option == "quad":
       remesh = "quad"
 
-    print("Running tensor inference forward pass cycle...")
     with torch.inference_mode():
       if torch.cuda.is_available():
         with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
@@ -236,3 +228,4 @@ def generate():
         return await model_instance.process_image.remote.aio(data)
 
     return web_app
+    
