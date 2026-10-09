@@ -1,4 +1,3 @@
-
 import base64
 import binascii
 import io
@@ -29,8 +28,6 @@ DEFAULT_TEXTURE_RESOLUTION = 2048
 MAX_IMAGE_PIXELS = 40_000_000
 FOREGROUND_SCALE = 0.85
 
-# Set to "quad" only if the installed SF3D implementation
-# supports this remeshing mode.
 REMESH_MODE = os.environ.get("SF3D_REMESH_MODE", "quad")
 
 app = modal.App(APP_NAME)
@@ -40,17 +37,10 @@ models_volume = modal.Volume.from_name(
     create_if_missing=True,
 )
 
-# Reuse the prebuilt image containing SF3D and its native
-# dependencies. Do not reinstall texture_baker or uv_unwrapper
-# here: these dependencies can require native compilation.
 image = modal.Image.from_registry(
     "rhydam12/sf3d-gpu-worker:latest",
     add_python="3.10",
 )
-
-# Experimental GPU snapshot support is platform/version
-# dependent. If Modal rejects this option, consult its current
-# GPU snapshot API instead of silently disabling snapshots.
 
 
 # ============================================================
@@ -71,13 +61,11 @@ def decode_image(data: Any):
     if not isinstance(data, str) or not data.strip():
         raise ValueError("Provide an image as a base64 string.")
 
-    # Accept both raw base64 and data:image/...;base64,... input.
     if data.startswith("data:"):
         header, separator, data = data.partition(",")
         if not separator or ";base64" not in header.lower():
             raise ValueError("Invalid base64 data URI.")
 
-    # Reject excessively large encoded input before decoding.
     if len(data) > 180_000_000:
         raise ValueError("Encoded image exceeds the input limit.")
 
@@ -115,8 +103,6 @@ def remove_background_and_center(image):
 
     from rembg import new_session, remove
 
-    # This function is normally called on the worker's persistent
-    # rembg session. The fallback supports standalone use.
     session = getattr(remove_background_and_center, "_session", None)
 
     if session is None:
@@ -132,8 +118,6 @@ def remove_background_and_center(image):
 
     foreground = rgba.crop(bbox)
 
-    # A square transparent canvas, with the foreground scaled
-    # to occupy 85% of the canvas's longest dimension.
     side = max(foreground.width, foreground.height)
     target_side = max(1, int(side * FOREGROUND_SCALE))
 
@@ -169,17 +153,7 @@ _PATCHED_METHODS = []
 
 
 def patch_query_triplane():
-    """
-    Patch the installed SF3D query_triplane implementation.
-
-    Insert:
-        positions = positions.to(device=triplanes.device)
-
-    immediately before its grid-sampling operation.
-
-    This intentionally fails loudly if the installed source has
-    changed, rather than claiming a patch succeeded when it did not.
-    """
+    """Patch the installed SF3D query_triplane implementation."""
     import sf3d.system as system_module
 
     with _PATCH_LOCK:
@@ -199,7 +173,6 @@ def patch_query_triplane():
             owners.append((system_module, "query_triplane", module_function))
 
         if not owners:
-            # Search other imported SF3D modules as package layouts vary.
             import sf3d
             import pkgutil
             import importlib
@@ -246,7 +219,6 @@ def patch_query_triplane():
             inserted = False
 
             for line in lines:
-                # Insert immediately before the actual sampling call.
                 if (
                     not inserted
                     and "grid_sample(" in line
@@ -298,8 +270,7 @@ def patch_query_triplane():
 
         if patched_count == 0:
             raise RuntimeError(
-                "query_triplane() was found, but its source could not "
-                "be safely patched. Inspect the installed implementation."
+                "query_triplane() was found, but its source could not be safely patched."
             )
 
         _PATCHED_METHODS.append(
@@ -332,8 +303,6 @@ class SF3DWorker:
 
         self.device = torch.device(GPU_DEVICE)
 
-        # Patch before loading the model so inference uses the
-        # corrected sampling function.
         patch_query_triplane()
 
         from sf3d.system import SF3D
@@ -343,25 +312,13 @@ class SF3DWorker:
         self.model.eval()
         self.model.to(self.device)
 
-        # Cache the background-removal session.
         remove_background_and_center._session = new_session("u2net")
-
-        # Persist downloaded model/cache artifacts in the volume.
         models_volume.commit()
 
         self._enforce_cuda()
-
-        # Warm up is intentionally omitted: snapshotting CUDA state
-        # requires validation against your Modal and PyTorch versions.
         torch.cuda.synchronize(self.device)
 
     def _enforce_cuda(self, *inputs):
-        """
-        Recheck device placement before each inference.
-
-        Moving all parameters on every request can be expensive.
-        Normally this is a no-op after the first successful placement.
-        """
         import torch
 
         if not torch.cuda.is_available():
@@ -372,11 +329,8 @@ class SF3DWorker:
         if self.device != device:
             self.device = device
 
-        # Restore model placement after a container resume.
         self.model.to(device)
 
-        # Validate parameters and buffers rather than assuming .to()
-        # has repaired every custom CUDA extension.
         for name, parameter in self.model.named_parameters():
             if parameter.device != device:
                 raise RuntimeError(
@@ -411,9 +365,6 @@ class SF3DWorker:
     def process_image(self, data):
         import torch
 
-        from PIL import Image
-
-        # Decode and preprocess outside inference mode.
         original = decode_image(data)
         processed = remove_background_and_center(original)
 
@@ -425,8 +376,6 @@ class SF3DWorker:
                     device_type="cuda",
                     dtype=torch.bfloat16,
                 ):
-                    # SF3D's public run_image API varies by release.
-                    # These options must match the installed version.
                     mesh, _ = self.model.run_image(
                         processed,
                         bake_resolution=DEFAULT_TEXTURE_RESOLUTION,
@@ -459,58 +408,8 @@ class SF3DWorker:
 
 
 # ============================================================
-# 5. FASTAPI ASGI WEBHOOK
+# 5. FASTAPI ASGI WEBHOOK (LAZILY IMPORTED)
 # ============================================================
-
-from fastapi import FastAPI, HTTPException
-from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel, Field
-
-web_app = FastAPI(title="SF3D Image-to-3D API")
-
-web_app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=False,
-    allow_methods=["POST", "GET", "OPTIONS"],
-    allow_headers=["*"],
-)
-
-
-class GenerateRequest(BaseModel):
-    image: str = Field(
-        ...,
-        description="Base64 image or data:image/...;base64 URI",
-    )
-
-
-@web_app.get("/health")
-async def health():
-    return {
-        "status": "ok",
-        "service": APP_NAME,
-        "model": MODEL_ID,
-    }
-
-
-@web_app.post("/generate")
-async def generate(request: GenerateRequest):
-    try:
-        result = await SF3DWorker().process_image.remote.aio(
-            {"image": request.image}
-        )
-        return result
-
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-
-    except Exception as exc:
-        traceback.print_exc()
-        raise HTTPException(
-            status_code=500,
-            detail=f"SF3D generation failed: {type(exc).__name__}: {exc}",
-        ) from exc
-
 
 @app.function(
     image=image,
@@ -518,4 +417,51 @@ async def generate(request: GenerateRequest):
 )
 @modal.asgi_app()
 def fastapi_app():
+    from fastapi import FastAPI, HTTPException
+    from fastapi.middleware.cors import CORSMiddleware
+    from pydantic import BaseModel, Field
+
+    web_app = FastAPI(title="SF3D Image-to-3D API")
+
+    web_app.add_middleware(
+        CORSMiddleware,
+        allow_origins=["*"],
+        allow_credentials=False,
+        allow_methods=["POST", "GET", "OPTIONS"],
+        allow_headers=["*"],
+    )
+
+    class GenerateRequest(BaseModel):
+        image: str = Field(
+            ...,
+            description="Base64 image or data:image/...;base64 URI",
+        )
+
+    @web_app.get("/health")
+    async def health():
+        return {
+            "status": "ok",
+            "service": APP_NAME,
+            "model": MODEL_ID,
+        }
+
+    @web_app.post("/generate")
+    async def generate(request: GenerateRequest):
+        try:
+            result = await SF3DWorker().process_image.remote.aio(
+                {"image": request.image}
+            )
+            return result
+
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+        except Exception as exc:
+            traceback.print_exc()
+            raise HTTPException(
+                status_code=500,
+                detail=f"SF3D generation failed: {type(exc).__name__}: {exc}",
+            ) from exc
+
     return web_app
+        
