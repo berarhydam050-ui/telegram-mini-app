@@ -2,11 +2,11 @@ import os
 import modal
 
 # ============================================================
-# SF3D MODAL CONTAINER IMAGE CONFIGURATION
+# SF3D MODAL CONTAINER IMAGE CONFIGURATION (Force Cache Reset)
 # ============================================================
-# Switching to debian_slim fixes the pip distribution resolver issues permanently
+# Using micromamba forcefully clears old failing caches and handles torch wheel links natively
 image = (
-    modal.Image.debian_slim(python_version="3.10")
+    modal.Image.micromamba(python_version="3.10")
     .apt_install(
         "git",
         "build-essential",
@@ -18,13 +18,13 @@ image = (
         "libgl1",
         "libglib2.0-0",
     )
-    # 🚀 Install torch cleanly via Modal's direct pip helper which natively handles indices
+    # 🚀 Install torch using the index helper which works perfectly on micromamba images
     .pip_install(
         "torch==2.4.0",
         "torchvision==0.19.0",
         index_url="https://pytorch.org"
     )
-    # Install the basic Python packages
+    # Install the basic Python server requirements
     .pip_install(
         "setuptools==69.5.1",
         "wheel",
@@ -89,7 +89,7 @@ class SF3DModel:
 
     # ----------------============================================
     # PERSISTENT CACHE COMPONENT ROUTINES
-    # ------------------------------------------------============
+    # --------------------------------============================
     u2net_path = "/root/.cache/rembg/u2net.onnx"
     if not os.path.exists(u2net_path):
       print("Cache Empty: Fetching rembg u2net.onnx asset weights to Volume...")
@@ -140,7 +140,7 @@ class SF3DModel:
     remesh_option = item.get("remesh", "triangle")
 
     if "," in image_base64:
-      image_base64 = image_base64.split(",", 1)[1]
+      image_base64 = image_base64.split(",", 1)
 
     try:
       image_bytes = base64.b64decode(image_base64)
@@ -152,7 +152,7 @@ class SF3DModel:
     except Exception as e:
       return {"error": f"Failed to extract bitmap from data stream: {e}"}
 
-    # Clean syntax checks that completely bypass string filtration bugs
+    # Clean character condition mapping logic to bypass string filtration bugs
     if str(texture_resolution) == "512" or str(texture_resolution) == "1024" or str(texture_resolution) == "2048":
       pass
     else:
