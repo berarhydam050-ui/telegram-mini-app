@@ -97,8 +97,8 @@
         Telegram.ready();
         Telegram.expand();
 
-        // Target Vercel serverless proxy endpoint to enable logging
-        const VERCEL_API_ENDPOINT = "/api/generate-3d";
+        // Direct Modal GPU Webhook URL
+        const MODAL_ENDPOINT = "https://berarhydam050--sf3d-backend-sf3dmodel-generate.modal.run";
 
         let selectedBase64 = "";
 
@@ -140,7 +140,7 @@
             viewer.style.display = "none";
 
             try {
-                const response = await fetch(VERCEL_API_ENDPOINT, {
+                const response = await fetch(MODAL_ENDPOINT, {
                     method: "POST",
                     headers: { "Content-Type": "application/json" },
                     body: JSON.stringify({ image: selectedBase64 })
@@ -148,8 +148,8 @@
 
                 const data = await response.json();
 
-                if (data.error || !data.success) {
-                    status.innerText = "Error: " + (data.error || "Generation failed.");
+                if (data.error) {
+                    status.innerText = "Error: " + data.error;
                     btn.disabled = false;
                     return;
                 }
@@ -176,7 +176,7 @@
 
             } catch (error) {
                 console.error(error);
-                status.innerText = "Failed to connect to backend serverless instance.";
+                status.innerText = "Failed to connect to background GPU instance.";
             } finally {
                 btn.disabled = false;
             }
