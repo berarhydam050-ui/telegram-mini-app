@@ -27,10 +27,10 @@ image = (
     .pip_install(
         "torch==2.4.0",
         "torchvision==0.19.0",
-        index_url="https://download.pytorch.org/whl/cu121",
+        index_url="https://pytorch.org",
     )
     .workdir("/app")
-    .run_commands("git clone https://github.com/Stability-AI/stable-fast-3d.git")
+    .run_commands("git clone https://github.com")
     .workdir("/app/stable-fast-3d")
     .run_commands(
         "grep -v '^./texture_baker/' requirements.txt | grep -v '^./uv_unwrapper/' > /tmp/sf3d_requirements.txt",
@@ -56,6 +56,12 @@ image = (
 
 app = modal.App("sf3d-backend")
 
+# ============================================================
+# CLOUD MODULAR STORAGE DISK DEFINITION
+# ============================================================
+# This automatically declares the cloud virtual folder without using local paths
+models_volume = modal.Volume.from_name("sf3d-models-volume", create_if_missing=True)
+
 
 @app.cls(
     image=image,
@@ -63,6 +69,8 @@ app = modal.App("sf3d-backend")
     timeout=900,
     scaledown_window=300,
     secrets=[modal.Secret.from_name("huggingface-secret")],
+    # This plugs the cloud drive folder right where asset caches expect to find them
+    volumes={"/root/.cache": models_volume},
 )
 class SF3DModel:
 
@@ -93,9 +101,34 @@ class SF3DModel:
     import uv_unwrapper
     print("uv_unwrapper OK")
 
+    # ----------------============================================
+    # AUTOMATED ASSET CHECK & PERSISTENT LOCAL VOLUME STORAGE
+    # ----------------============================================
+    # Verify if background removal file exists inside the virtual drive path
+    u2net_path = "/root/.cache/rembg/u2net.onnx"
+    if not os.path.exists(u2net_path):
+      print("First-time setup: Downloading background removal model inside Modal Volume...")
+      from rembg import new_session
+      temp_session = new_session() 
+      models_volume.commit() # Save and lock the file inside the storage volume permanently
+      print("Background removal asset cached successfully!")
+
+    # Verify if stabilityai structural weights exist inside the virtual drive path
+    sf3d_path = "/root/.cache/huggingface/hub/models--stabilityai--stable-fast-3d"
+    if not os.path.exists(sf3d_path):
+      print("First-time setup: Downloading SF3D weights inside Modal Volume...")
+      from huggingface_hub import snapshot_download
+      snapshot_download(
+          repo_id="stabilityai/stable-fast-3d",
+          allow_patterns=["*.txt", "*.json", "*.safetensors"]
+      )
+      models_volume.commit() # Save and lock the files inside the storage volume permanently
+      print("SF3D architecture weights cached successfully!")
+    # ----------------============================================
+
     from sf3d.system import SF3D
 
-    # 2. Load the model now that we are authenticated
+    # 2. Load the model (Loads instantly from the mounted volume storage)
     self.model = SF3D.from_pretrained(
         "stabilityai/stable-fast-3d",
         config_name="config.yaml",
@@ -104,7 +137,7 @@ class SF3DModel:
     device = "cuda" if torch.cuda.is_available() else "cpu"
     self.model.to(device)
     self.model.eval()
-    print("SF3D MODEL LOADED")
+    print("SF3D MODEL INITIALIZED AND READY")
     print("Device:", device)
 
   @modal.method()
@@ -137,7 +170,7 @@ class SF3DModel:
     except Exception as e:
       raise ValueError(f"Could not open image: {e}")
 
-    if texture_resolution not in [512, 1024, 2048]:
+    if texture_resolution not in:
       texture_resolution = 1024
     if remesh_option not in ["none", "triangle", "quad"]:
       remesh_option = "triangle"
@@ -185,61 +218,4 @@ class SF3DModel:
       glb_bytes = f.read()
 
     return base64.b64encode(glb_bytes).decode("utf-8")
-
-
-@app.function(
-    image=image,
-    timeout=900,
-    secrets=[modal.Secret.from_name("huggingface-secret")],
-)
-@modal.asgi_app()
-def api():
-  from fastapi import FastAPI
-  from fastapi.middleware.cors import CORSMiddleware
-  from pydantic import BaseModel
-
-  web_app = FastAPI()
-
-  web_app.add_middleware(
-      CORSMiddleware,
-      allow_origins=["*"],
-      allow_credentials=True,
-      allow_methods=["*"],
-      allow_headers=["*"],
-  )
-
-  class GenerateRequest(BaseModel):
-    image: str
-    texture_resolution: int = 1024
-    remesh: str = "triangle"
-
-  @web_app.get("/")
-  async def root():
-    return {
-        "status": "ok",
-        "service": "SF3D",
-        "gpu": "A10G",
-    }
-
-  @web_app.post("/generate")
-  async def generate(request: GenerateRequest):
-    try:
-      model = SF3DModel()
-      result = await model.generate_mesh.remote.aio(
-          request.image,
-          int(request.texture_resolution),
-          str(request.remesh),
-      )
-      return {
-          "status": "success",
-          "model": result,
-      }
-    except Exception as e:
-      print("GENERATION ERROR:", repr(e))
-      return {
-          "status": "error",
-          "error": str(e),
-      }
-
-  return web_app
     
