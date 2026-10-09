@@ -28,10 +28,10 @@ image = (
     .pip_install(
         "torch==2.4.0",
         "torchvision==0.19.0",
-        index_url="https://pytorch.org",
+        index_url="https://download.pytorch.org/whl/cu121",
     )
     .workdir("/app")
-    .run_commands("git clone https://github.com")
+    .run_commands("git clone https://github.com/Stability-AI/stable-fast-3d.git")
     .workdir("/app/stable-fast-3d")
     .run_commands(
         "grep -v '^./texture_baker/' requirements.txt | grep -v '^./uv_unwrapper/' > /tmp/sf3d_requirements.txt",
@@ -68,7 +68,7 @@ models_volume = modal.Volume.from_name("sf3d-models-volume", create_if_missing=T
     gpu="A10G",
     timeout=900,
     scaledown_window=300,
-    secrets=[modal.Secret.from_dict({"HF_TOKEN": os.environ.get("HF_TOKEN", "")})],
+    secrets=[modal.Secret.from_name("huggingface-secret")],
     volumes={"/root/.cache": models_volume},
 )
 class SF3DModel:
@@ -152,8 +152,7 @@ class SF3DModel:
     except Exception as e:
       return {"error": f"Failed to extract bitmap from data stream: {e}"}
 
-    # ✨ FIXED SYNTAX ERROR: Mapped explicitly to valid resolution choices
-    if texture_resolution not in:
+    if texture_resolution not in [512, 1024, 2048]:
       texture_resolution = 1024
     if remesh_option not in ["none", "triangle", "quad"]:
       remesh_option = "triangle"
@@ -186,4 +185,4 @@ class SF3DModel:
       glb_bytes = f.read()
 
     return {"model": base64.b64encode(glb_bytes).decode("utf-8")}
-      
+    
