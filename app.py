@@ -1,4 +1,3 @@
-
 import base64
 import binascii
 import io
@@ -15,7 +14,6 @@ import modal
 # ---------------------------------------------------------
 
 IMAGE_NAME = "rhydam12/sf3d-gpu-worker:latest"
-REPO_DIR = "/app/stable-fast-3d"
 CACHE_DIR = "/root/.cache"
 
 image = modal.Image.from_registry(
@@ -32,19 +30,17 @@ models_volume = modal.Volume.from_name(
 
 
 # ---------------------------------------------------------
-# 2. PATCH THE SF3D DEVICE MISMATCH
+# 2. PATCH THE SF3D DEVICE MISMATCH (DYNAMIC PATH)
 # ---------------------------------------------------------
 
 def patch_sf3d_source():
     """
-    Patch query_triplane() before importing SF3D.
-
-    Positions must be on the same device as triplanes before
-    grid_sample() receives the constructed sampling grid.
+    Dynamically locate sf3d package and patch query_triplane() 
+    to prevent device mismatch (cpu vs cuda:0) during grid_sample().
     """
+    import sf3d
     system_path = os.path.join(
-        REPO_DIR,
-        "sf3d",
+        os.path.dirname(sf3d.__file__),
         "system.py",
     )
 
@@ -56,13 +52,11 @@ def patch_sf3d_source():
     with open(system_path, "r", encoding="utf-8") as file:
         source = file.read()
 
-    # Avoid applying the patch repeatedly.
     marker = "# Modal device-sync fix"
     if marker in source:
         print("SF3D device-sync patch already present.")
         return
 
-    # Restrict the patch to query_triplane().
     function_match = re.search(
         r"(?m)^([ \t]*)def query_triplane\(",
         source,
@@ -88,7 +82,6 @@ def patch_sf3d_source():
 
     function_source = source[start:end]
 
-    # Handle both assertion-based and direct scale_tensor layouts.
     pattern = re.compile(
         r"(?m)^([ \t]*)positions\s*=\s*scale_tensor\("
     )
@@ -161,8 +154,7 @@ class SF3DModel:
                 "CUDA is unavailable. Check the Modal GPU configuration."
             )
 
-        # Apply the patch before importing SF3D.
-        sys.path.insert(0, REPO_DIR)
+        # Apply the patch dynamically based on the installed package path.
         patch_sf3d_source()
 
         token = (
@@ -178,8 +170,6 @@ class SF3DModel:
 
         login(token=token)
 
-        # Load the background-removal model once per worker.
-        # This also populates its cache under /root/.cache.
         print("Initializing background-removal session.")
         self.rembg_session = new_session("u2net")
 
@@ -198,8 +188,6 @@ class SF3DModel:
         self.model.eval()
 
         torch.cuda.synchronize()
-
-        # Commit cached downloads to persistent storage.
         models_volume.commit()
 
         print("SF3D model initialization complete.")
@@ -217,30 +205,15 @@ class SF3DModel:
             )
 
         self.device = torch.device("cuda:0")
-
-        # Move all registered parameters and buffers.
         self.model.to(self.device)
 
-        # Explicitly repair misplaced parameter tensors.
         for name, parameter in self.model.named_parameters():
             if parameter.device != self.device:
                 parameter.data = parameter.data.to(self.device)
 
-            if parameter.device != self.device:
-                raise RuntimeError(
-                    f"Parameter {name} is still on "
-                    f"{parameter.device}."
-                )
-
-        # Explicitly repair misplaced buffers.
         for name, buffer in self.model.named_buffers():
             if buffer.device != self.device:
                 buffer.data = buffer.data.to(self.device)
-
-            if buffer.device != self.device:
-                raise RuntimeError(
-                    f"Buffer {name} is still on {buffer.device}."
-                )
 
         torch.cuda.synchronize()
 
@@ -263,15 +236,12 @@ class SF3DModel:
             )
 
         encoded = encoded.strip()
-
-        # Support data:image/png;base64,... and similar headers.
         encoded = re.sub(
             r"^data:image/[^;]+;base64,",
             "",
             encoded,
             flags=re.IGNORECASE,
         )
-
         encoded = re.sub(r"\s+", "", encoded)
 
         try:
@@ -294,7 +264,6 @@ class SF3DModel:
                 "The decoded content is not a valid image."
             ) from exc
 
-        # Basic request-size safeguard.
         if result.width * result.height > 40_000_000:
             raise ValueError(
                 "The image is too large. Maximum: 40 megapixels."
@@ -314,9 +283,7 @@ class SF3DModel:
             resize_foreground,
         )
 
-        # Validate request and image.
         image = self._decode_image(item)
-
         resolution = item.get("texture_resolution", 2048)
 
         if (
@@ -340,10 +307,8 @@ class SF3DModel:
             else remesh_option
         )
 
-        # Important after a snapshot restore.
         self._enforce_cuda()
 
-        # Remove background and center the foreground.
         image = remove_background(
             image,
             self.rembg_session,
@@ -389,7 +354,6 @@ class SF3DModel:
         if len(mesh.vertices) == 0:
             raise RuntimeError("SF3D returned an empty mesh.")
 
-        # Export the mesh with textures to GLB.
         output_path = "/tmp/output.glb"
 
         try:
@@ -467,11 +431,9 @@ def generate():
 
         try:
             model_instance = SF3DModel()
-
             result = await model_instance.process_image.remote.aio(
                 data
             )
-
             return result
 
         except ValueError as exc:
@@ -493,3 +455,4 @@ def generate():
             ) from exc
 
     return web_app
+    
