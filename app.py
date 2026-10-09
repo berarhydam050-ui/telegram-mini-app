@@ -96,6 +96,7 @@ def remove_background_and_center(image):
     scaledown_window=2,             # Shuts down instantly after completion ($0.00 idle cost)
     enable_memory_snapshot=True,    # Enforces pure memory snapshot restoration (~9s cold start)
     experimental_options={"enable_gpu_snapshot": True},
+    secrets=[modal.Secret.from_name("huggingface-secret")],
     timeout=900,
     max_containers=5,
 )
@@ -105,11 +106,17 @@ class SF3DModel:
     def load_model(self):
         import torch
         import torch.nn.functional as F
+        from huggingface_hub import login
 
         if not torch.cuda.is_available():
             raise RuntimeError("CUDA is unavailable in the worker.")
 
         self.device = torch.device(GPU_DEVICE)
+
+        # Authenticate with Hugging Face using secret
+        hf_token = os.environ.get("HF_TOKEN") or os.environ.get("HUGGINGFACE_TOKEN")
+        if hf_token:
+            login(token=hf_token)
 
         # Global safety patch: Force grid_sample inputs to match device on resume
         if not getattr(F.grid_sample, "_is_snapshot_safe", False):
@@ -125,7 +132,11 @@ class SF3DModel:
         from sf3d.system import SF3D
         from rembg import new_session
 
-        self.model = SF3D.from_pretrained(MODEL_ID)
+        self.model = SF3D.from_pretrained(
+            MODEL_ID,
+            config_name="config.yaml",
+            weight_name="model.safetensors",
+        )
         self.model.eval()
         self.model.to(self.device)
 
@@ -215,4 +226,4 @@ def generate():
             ) from exc
 
     return web_app
-    
+            
