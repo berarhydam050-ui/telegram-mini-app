@@ -3,6 +3,7 @@ import binascii
 import io
 import os
 import sys
+import types
 import traceback
 from typing import Any
 import modal
@@ -14,11 +15,10 @@ CACHE_DIR = "/root/.cache"
 MODEL_ID = "stabilityai/stable-fast-3d"
 GPU_DEVICE = "cuda:0"
 
-# High-fidelity defaults
 DEFAULT_TEXTURE_RESOLUTION = 2048
 MAX_IMAGE_PIXELS = 40_000_000
 FOREGROUND_SCALE = 0.85
-REMESH_MODE = "none"  # "none" preserves fine detail like faces
+REMESH_MODE = "none"
 
 app = modal.App(APP_NAME)
 models_volume = modal.Volume.from_name(VOLUME_NAME, create_if_missing=True)
@@ -94,8 +94,8 @@ def remove_background_and_center(image):
     image=image,
     gpu="A10G",
     volumes={CACHE_DIR: models_volume},
-    scaledown_window=2,             # $0.00 idle cost
-    enable_memory_snapshot=True,    # Fast ~9s cold starts
+    scaledown_window=2,
+    enable_memory_snapshot=True,
     experimental_options={"enable_gpu_snapshot": True},
     secrets=[modal.Secret.from_name("huggingface-secret")],
     timeout=900,
@@ -106,6 +106,7 @@ class SF3DModel:
     @modal.enter(snap=True)
     def load_model(self):
         import torch
+        import torch.cuda.amp
         from huggingface_hub import login
 
         if not torch.cuda.is_available():
@@ -113,22 +114,20 @@ class SF3DModel:
 
         self.device = torch.device(GPU_DEVICE)
 
+        # Fix torch.amp import error directly in Python runtime memory
+        if hasattr(torch, "amp"):
+            torch.amp.custom_fwd = getattr(torch.amp, "custom_fwd", torch.cuda.amp.custom_fwd)
+            torch.amp.custom_bwd = getattr(torch.amp, "custom_bwd", torch.cuda.amp.custom_bwd)
+        else:
+            torch.amp = types.ModuleType("amp")
+            torch.amp.custom_fwd = torch.cuda.amp.custom_fwd
+            torch.amp.custom_bwd = torch.cuda.amp.custom_bwd
+
         hf_token = os.environ.get("HF_TOKEN") or os.environ.get("HUGGINGFACE_TOKEN")
         if hf_token:
             login(token=hf_token)
 
-        # Patch PyTorch AMP compatibility
-        network_path = "/app/stable-fast-3d/sf3d/models/network.py"
-        if os.path.exists(network_path):
-            with open(network_path, "r") as f:
-                code = f.read()
-            code = code.replace("from torch.amp import custom_bwd, custom_fwd", "from torch.cuda.amp import custom_bwd, custom_fwd")
-            code = code.replace('device_type="cuda"', '')
-            code = code.replace("device_type='cuda'", '')
-            with open(network_path, "w") as f:
-                f.write(code)
-
-        # CPU Safe Wrapper for C++ ops
+        # CPU Safe Wrapper for texture_baker C++ ops
         baker_path = "/opt/conda/lib/python3.10/site-packages/texture_baker/baker.py"
         if os.path.exists(baker_path):
             with open(baker_path, "r") as f:
@@ -162,7 +161,6 @@ class SF3DModel:
         remove_background_and_center._session = new_session("u2net")
         models_volume.commit()
 
-        # Clean VRAM state before snapshot serialization
         torch.cuda.empty_cache()
         torch.cuda.synchronize(self.device)
         print("Snapshot model initialization complete.")
@@ -170,8 +168,13 @@ class SF3DModel:
     @modal.method()
     def process_image(self, item: dict):
         import torch
+        import torch.cuda.amp
 
-        # Force CUDA state on wake-up
+        # Re-apply memory patch on wake-up
+        if hasattr(torch, "amp"):
+            torch.amp.custom_fwd = getattr(torch.amp, "custom_fwd", torch.cuda.amp.custom_fwd)
+            torch.amp.custom_bwd = getattr(torch.amp, "custom_bwd", torch.cuda.amp.custom_bwd)
+
         if torch.cuda.is_available():
             torch.set_default_device("cuda")
             torch.cuda.empty_cache()
@@ -254,3 +257,4 @@ def generate():
             ) from exc
 
     return web_app
+        
