@@ -97,8 +97,8 @@
         Telegram.ready();
         Telegram.expand();
 
-        // ✨ FIXED ENDPOINT TARGET: Maps directly to your live running function class link
-        const MODAL_ENDPOINT = "https://berarhydam050--sf3d-backend-sf3dmodel-generate.modal.run";
+        // Target Vercel serverless proxy endpoint to enable logging
+        const VERCEL_API_ENDPOINT = "/api/generate-3d";
 
         let selectedBase64 = "";
 
@@ -140,7 +140,7 @@
             viewer.style.display = "none";
 
             try {
-                const response = await fetch(MODAL_ENDPOINT, {
+                const response = await fetch(VERCEL_API_ENDPOINT, {
                     method: "POST",
                     headers: { "Content-Type": "application/json" },
                     body: JSON.stringify({ image: selectedBase64 })
@@ -148,8 +148,8 @@
 
                 const data = await response.json();
 
-                if (data.error) {
-                    status.innerText = "Error: " + data.error;
+                if (data.error || !data.success) {
+                    status.innerText = "Error: " + (data.error || "Generation failed.");
                     btn.disabled = false;
                     return;
                 }
@@ -157,7 +157,6 @@
                 if (data.model) {
                     status.innerText = "Generation complete! Loading 3D model...";
                     
-                    // Convert raw base64 data stream back into a real binary blob object
                     const byteCharacters = atob(data.model);
                     const byteNumbers = new Array(byteCharacters.length);
                     for (let i = 0; i < byteCharacters.length; i++) {
@@ -166,7 +165,6 @@
                     const byteArray = new Uint8Array(byteNumbers);
                     const blob = new Blob([byteArray], { type: "model/gltf-binary" });
                     
-                    // Create an explicit locally accessible DOM URL for model-viewer to display
                     const modelUrl = URL.createObjectURL(blob);
                     
                     viewer.src = modelUrl;
@@ -178,7 +176,7 @@
 
             } catch (error) {
                 console.error(error);
-                status.innerText = "Failed to connect to your background GPU instance.";
+                status.innerText = "Failed to connect to backend serverless instance.";
             } finally {
                 btn.disabled = false;
             }
