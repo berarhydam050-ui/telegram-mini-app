@@ -58,7 +58,7 @@ image = (
 app = modal.App("sf3d-backend")
 
 # ============================================================
-# AUTONOMOUS MODULAR CACHE STORAGE VOLUME (Pay-As-You-Run)
+# AUTONOMOUS MODULAR CACHE STORAGE VOLUME
 # ============================================================
 models_volume = modal.Volume.from_name("sf3d-models-volume", create_if_missing=True)
 
@@ -68,7 +68,6 @@ models_volume = modal.Volume.from_name("sf3d-models-volume", create_if_missing=T
     gpu="A10G",
     timeout=900,
     scaledown_window=300,
-    # Inject token pass-through context dynamically from your workflow layer
     secrets=[modal.Secret.from_dict({"HF_TOKEN": os.environ.get("HF_TOKEN", "")})],
     volumes={"/root/.cache": models_volume},
 )
@@ -84,14 +83,13 @@ class SF3DModel:
     
     hf_token = os.environ.get("HF_TOKEN")
     if not hf_token:
-      raise ValueError("HF_TOKEN variable is completely missing from runtime context container.")
+      raise ValueError("HF_TOKEN variable is missing from runtime context container.")
     print("Authenticating with Hugging Face Hub...")
     login(token=hf_token)
 
     # ----------------============================================
     # PERSISTENT CACHE COMPONENT ROUTINES
     # ------------------------------------------------============
-    # Verify rembg model layer
     u2net_path = "/root/.cache/rembg/u2net.onnx"
     if not os.path.exists(u2net_path):
       print("Cache Empty: Fetching rembg u2net.onnx asset weights to Volume...")
@@ -100,7 +98,6 @@ class SF3DModel:
       models_volume.commit() 
       print("Rembg library baseline saved successfully!")
 
-    # Verify model architecture layers
     sf3d_path = "/root/.cache/huggingface/hub/models--stabilityai--stable-fast-3d"
     if not os.path.exists(sf3d_path):
       print("Cache Empty: Sourcing SF3D model configurations from Hugging Face...")
@@ -138,7 +135,6 @@ class SF3DModel:
         resize_foreground,
     )
 
-    # Extract clean dictionary objects mapped out by your generate-3d.js payload
     image_base64 = item.get("image", "")
     texture_resolution = item.get("texture_resolution", 1024)
     remesh_option = item.get("remesh", "triangle")
@@ -156,7 +152,7 @@ class SF3DModel:
     except Exception as e:
       return {"error": f"Failed to extract bitmap from data stream: {e}"}
 
-    # FIX: Patched the syntax error below by validating choices explicitly against clean lists
+    # ✨ FIXED SYNTAX ERROR: Mapped explicitly to valid resolution choices
     if texture_resolution not in:
       texture_resolution = 1024
     if remesh_option not in ["none", "triangle", "quad"]:
@@ -189,6 +185,5 @@ class SF3DModel:
     with open(output_path, "rb") as f:
       glb_bytes = f.read()
 
-    # Formats to the exact 'data.model' return layout expected by your JS pipeline route
     return {"model": base64.b64encode(glb_bytes).decode("utf-8")}
       
