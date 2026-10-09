@@ -1,55 +1,123 @@
 import base64
+import binascii
 import io
 import os
 import sys
-import types
+import traceback
+from typing import Any
 import modal
+
+APP_NAME = "sf3d-backend"
+VOLUME_NAME = "sf3d-models-volume"
+CACHE_DIR = "/root/.cache"
+
+MODEL_ID = "stabilityai/stable-fast-3d"
+GPU_DEVICE = "cuda:0"
+
+# High-fidelity defaults
+DEFAULT_TEXTURE_RESOLUTION = 2048
+MAX_IMAGE_PIXELS = 40_000_000
+FOREGROUND_SCALE = 0.85
+REMESH_MODE = "none"  # "none" preserves fine detail like faces
+
+app = modal.App(APP_NAME)
+models_volume = modal.Volume.from_name(VOLUME_NAME, create_if_missing=True)
 
 image = modal.Image.from_registry(
     "rhydam12/sf3d-gpu-worker:latest",
-    add_python="3.10"
+    add_python="3.10",
 )
 
-app = modal.App("sf3d-backend")
-models_volume = modal.Volume.from_name("sf3d-models-volume", create_if_missing=True)
+
+def decode_image(data: Any):
+    from PIL import Image, ImageOps
+    if isinstance(data, dict):
+        data = data.get("image") or data.get("image_base64") or data.get("imageBase64")
+    if not isinstance(data, str) or not data.strip():
+        raise ValueError("Provide an image as a base64 string.")
+    if data.startswith("data:"):
+        header, separator, data = data.partition(",")
+        if not separator or ";base64" not in header.lower():
+            raise ValueError("Invalid base64 data URI.")
+    if len(data) > 180_000_000:
+        raise ValueError("Encoded image exceeds the input limit.")
+    try:
+        raw = base64.b64decode(data, validate=True)
+    except (binascii.Error, ValueError) as exc:
+        raise ValueError("Invalid base64 image data.") from exc
+    if not raw:
+        raise ValueError("The uploaded image is empty.")
+    try:
+        with Image.open(io.BytesIO(raw)) as source:
+            width, height = source.size
+            if width <= 0 or height <= 0:
+                raise ValueError("Invalid image dimensions.")
+            if width * height > MAX_IMAGE_PIXELS:
+                raise ValueError("Image exceeds the 40-megapixel limit.")
+            source.load()
+            result = ImageOps.exif_transpose(source).convert("RGBA")
+    except Exception as exc:
+        raise ValueError("Could not decode the uploaded image.") from exc
+    return result
+
+
+def remove_background_and_center(image):
+    from PIL import Image
+    from rembg import new_session, remove
+
+    session = getattr(remove_background_and_center, "_session", None)
+    if session is None:
+        session = new_session("u2net")
+        remove_background_and_center._session = session
+
+    rgba = remove(image, session=session).convert("RGBA")
+    alpha = rgba.getchannel("A")
+    bbox = alpha.getbbox()
+    if bbox is None:
+        raise ValueError("No foreground subject was detected.")
+
+    foreground = rgba.crop(bbox)
+    side = max(foreground.width, foreground.height)
+    target_side = max(1, int(side * FOREGROUND_SCALE))
+    scale = target_side / max(foreground.width, foreground.height)
+    new_size = (max(1, int(foreground.width * scale)), max(1, int(foreground.height * scale)))
+    foreground = foreground.resize(new_size, Image.Resampling.LANCZOS)
+
+    canvas_side = max(new_size)
+    canvas = Image.new("RGBA", (canvas_side, canvas_side), (0, 0, 0, 0))
+    position = ((canvas_side - foreground.width) // 2, (canvas_side - foreground.height) // 2)
+    canvas.alpha_composite(foreground, dest=position)
+    return canvas
 
 
 @app.cls(
     image=image,
     gpu="A10G",
-    timeout=900,
-    scaledown_window=2,  # Shuts down instantly after task completion ($0.00 idle cost)
-    enable_memory_snapshot=True,
+    volumes={CACHE_DIR: models_volume},
+    scaledown_window=2,             # $0.00 idle cost
+    enable_memory_snapshot=True,    # Fast ~9s cold starts
     experimental_options={"enable_gpu_snapshot": True},
     secrets=[modal.Secret.from_name("huggingface-secret")],
-    volumes={"/root/.cache": models_volume},
+    timeout=900,
+    max_containers=5,
 )
 class SF3DModel:
 
     @modal.enter(snap=True)
     def load_model(self):
         import torch
-        import torch.cuda.amp
-        import torch.nn.functional as F
         from huggingface_hub import login
 
-        print("STARTING INITIALIZATION FOR SNAPSHOT CACHE")
+        if not torch.cuda.is_available():
+            raise RuntimeError("CUDA is unavailable in the worker.")
 
-        # 1. Patch PyTorch AMP custom_fwd / custom_bwd kwargs
-        def safe_custom_fwd(*args, **kwargs):
-            kwargs.pop("device_type", None)
-            return torch.cuda.amp.custom_fwd(*args, **kwargs)
+        self.device = torch.device(GPU_DEVICE)
 
-        def safe_custom_bwd(*args, **kwargs):
-            kwargs.pop("device_type", None)
-            return torch.cuda.amp.custom_bwd(*args, **kwargs)
+        hf_token = os.environ.get("HF_TOKEN") or os.environ.get("HUGGINGFACE_TOKEN")
+        if hf_token:
+            login(token=hf_token)
 
-        if not hasattr(torch, "amp"):
-            torch.amp = types.ModuleType("amp")
-
-        torch.amp.custom_fwd = safe_custom_fwd
-        torch.amp.custom_bwd = safe_custom_bwd
-
+        # Patch PyTorch AMP compatibility
         network_path = "/app/stable-fast-3d/sf3d/models/network.py"
         if os.path.exists(network_path):
             with open(network_path, "r") as f:
@@ -60,7 +128,7 @@ class SF3DModel:
             with open(network_path, "w") as f:
                 f.write(code)
 
-        # 2. Patch texture_baker C++ ops to run safely on CPU
+        # CPU Safe Wrapper for C++ ops
         baker_path = "/opt/conda/lib/python3.10/site-packages/texture_baker/baker.py"
         if os.path.exists(baker_path):
             with open(baker_path, "r") as f:
@@ -77,161 +145,112 @@ class SF3DModel:
                 with open(baker_path, "w") as f:
                     f.write(baker_code)
 
-        # 3. GLOBAL GRID_SAMPLE WAKE-UP SAFETY NET (Crucial for Snapshots)
-        if not getattr(F.grid_sample, "_is_snapshot_safe", False):
-            _orig_grid_sample = F.grid_sample
-            def _safe_grid_sample(input, grid, mode='bilinear', padding_mode='zeros', align_corners=None):
-                dev = input.device
-                if grid.device != dev:
-                    grid = grid.to(dev)
-                return _orig_grid_sample(input, grid, mode=mode, padding_mode=padding_mode, align_corners=align_corners)
-            _safe_grid_sample._is_snapshot_safe = True
-            F.grid_sample = _safe_grid_sample
-
-        hf_token = os.environ.get("HF_TOKEN")
-        if not hf_token:
-            print("Warning: HF_TOKEN variable is missing from runtime context container.")
-        else:
-            print("Authenticating with Hugging Face Hub...")
-            login(token=hf_token)
-
-        u2net_path = "/root/.cache/rembg/u2net.onnx"
-        if not os.path.exists(u2net_path):
-            print("Cache Empty: Fetching rembg u2net.onnx asset weights to Volume...")
-            from rembg import new_session
-            temp_session = new_session() 
-            models_volume.commit() 
-
-        sf3d_path = "/root/.cache/huggingface/hub/models--stabilityai--stable-fast-3d"
-        if not os.path.exists(sf3d_path):
-            print("Cache Empty: Sourcing SF3D model configurations from Hugging Face...")
-            from huggingface_hub import snapshot_download
-            snapshot_download(
-                repo_id="stabilityai/stable-fast-3d",
-                allow_patterns=["*.txt", "*.json", "*.safetensors"]
-            )
-            models_volume.commit() 
-
-        sys.path.append("/app/stable-fast-3d")
-        from sf3d.system import SF3D
-
-        print("Loading network weights into memory for snapshotting...")
-        self.model = SF3D.from_pretrained(
-            "stabilityai/stable-fast-3d",
-            config_name="config.yaml",
-            weight_name="model.safetensors",
-        )
-        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        self.model.to(self.device)
-        self.model.eval()
-        print("SNAPSHOT PREPARATION COMPLETE")
-
-    @modal.method()
-    def process_image(self, item: dict):
-        import base64
-        import io
-        import torch
-        import torch.cuda.amp
-        from PIL import Image
-        from rembg import new_session
-
-        # WAKE-UP DEVICE RE-SYNC: Force PyTorch to remember CUDA
-        if torch.cuda.is_available():
-            torch.set_default_device("cuda")
-        self.model.to(self.device)
-
-        def safe_custom_fwd(*args, **kwargs):
-            kwargs.pop("device_type", None)
-            return torch.cuda.amp.custom_fwd(*args, **kwargs)
-
-        def safe_custom_bwd(*args, **kwargs):
-            kwargs.pop("device_type", None)
-            return torch.cuda.amp.custom_bwd(*args, **kwargs)
-
-        if not hasattr(torch, "amp"):
-            torch.amp = types.ModuleType("amp")
-
-        torch.amp.custom_fwd = safe_custom_fwd
-        torch.amp.custom_bwd = safe_custom_bwd
-
         if "/app/stable-fast-3d" not in sys.path:
             sys.path.append("/app/stable-fast-3d")
 
-        from sf3d.utils import (
-            remove_background,
-            resize_foreground,
+        from sf3d.system import SF3D
+        from rembg import new_session
+
+        self.model = SF3D.from_pretrained(
+            MODEL_ID,
+            config_name="config.yaml",
+            weight_name="model.safetensors",
         )
+        self.model.eval()
+        self.model.to(self.device)
 
-        image_base64 = item.get("image", "")
-        texture_resolution = item.get("texture_resolution", 1024)
-        remesh_option = item.get("remesh", "quad")
+        remove_background_and_center._session = new_session("u2net")
+        models_volume.commit()
 
-        if "," in image_base64:
-            image_base64 = image_base64.split(",", 1)[1]
+        # Clean VRAM state before snapshot serialization
+        torch.cuda.empty_cache()
+        torch.cuda.synchronize(self.device)
+        print("Snapshot model initialization complete.")
+
+    @modal.method()
+    def process_image(self, item: dict):
+        import torch
+
+        # Force CUDA state on wake-up
+        if torch.cuda.is_available():
+            torch.set_default_device("cuda")
+            torch.cuda.empty_cache()
+
+        self.model.to(self.device)
+
+        original = decode_image(item)
+        processed = remove_background_and_center(original)
+
+        texture_resolution = int(item.get("texture_resolution", DEFAULT_TEXTURE_RESOLUTION))
+        remesh_option = item.get("remesh", REMESH_MODE)
 
         try:
-            image_bytes = base64.b64decode(image_base64)
-            image = Image.open(io.BytesIO(image_bytes)).convert("RGBA")
-        except Exception as e:
-            return {"error": f"Invalid image payload: {e}"}
-
-        if str(texture_resolution) not in ["512", "1024", "2048"]:
-            texture_resolution = 1024
-            
-        if str(remesh_option) not in ["none", "triangle", "quad"]:
-            remesh_option = "quad"
-
-        session = new_session()
-        image = remove_background(image, session)
-
-        bbox = image.getbbox()
-        if bbox:
-            image = image.crop(bbox)
-
-        image = resize_foreground(image, 0.85)
-
-        remesh = None
-        if remesh_option == "triangle":
-            remesh = "triangle"
-        elif remesh_option == "quad":
-            remesh = "quad"
-
-        with torch.inference_mode():
-            if torch.cuda.is_available():
+            with torch.inference_mode():
                 with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
-                    mesh, glob_dict = self.model.run_image(image, bake_resolution=int(texture_resolution), remesh=remesh)
-            else:
-                mesh, glob_dict = self.model.run_image(image, bake_resolution=int(texture_resolution), remesh=remesh)
+                    mesh, _ = self.model.run_image(
+                        processed,
+                        bake_resolution=texture_resolution,
+                        remesh=remesh_option if remesh_option != "none" else None,
+                    )
 
-        output_path = "/tmp/output.glb"
-        mesh.export(output_path, file_type="glb", include_normals=True)
+            output = io.BytesIO()
+            mesh.export(output, file_type="glb", include_normals=True)
+            glb_bytes = output.getvalue()
 
-        with open(output_path, "rb") as f:
-            glb_bytes = f.read()
+            if not glb_bytes:
+                raise RuntimeError("SF3D returned an empty GLB.")
 
-        return {"model": base64.b64encode(glb_bytes).decode("utf-8")}
+            encoded = base64.b64encode(glb_bytes).decode("ascii")
+
+            return {
+                "success": True,
+                "format": "glb",
+                "mime_type": "model/gltf-binary",
+                "model_base64": encoded,
+                "texture_resolution": texture_resolution,
+                "remesh": remesh_option,
+            }
+
+        except Exception:
+            traceback.print_exc()
+            raise
+        finally:
+            torch.cuda.empty_cache()
 
 
 @app.function(image=image, scaledown_window=2)
 @modal.asgi_app()
 def generate():
-    from fastapi import FastAPI, Request
+    from fastapi import FastAPI, HTTPException, Request
     from fastapi.middleware.cors import CORSMiddleware
 
-    web_app = FastAPI()
+    web_app = FastAPI(title="SF3D Image-to-3D API")
     web_app.add_middleware(
         CORSMiddleware,
         allow_origins=["*"],
-        allow_credentials=True,
-        allow_methods=["*"],
+        allow_credentials=False,
+        allow_methods=["POST", "GET", "OPTIONS"],
         allow_headers=["*"],
     )
 
+    @web_app.get("/")
+    async def health():
+        return {"status": "ok", "service": APP_NAME, "model": MODEL_ID}
+
     @web_app.post("/")
     async def run_generate(request: Request):
-        data = await request.json()
-        model_instance = SF3DModel()
-        return await model_instance.process_image.remote.aio(data)
+        try:
+            data = await request.json()
+            model_instance = SF3DModel()
+            result = await model_instance.process_image.remote.aio(data)
+            return result
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except Exception as exc:
+            traceback.print_exc()
+            raise HTTPException(
+                status_code=500,
+                detail=f"SF3D generation failed: {type(exc).__name__}: {exc}",
+            ) from exc
 
     return web_app
-            
