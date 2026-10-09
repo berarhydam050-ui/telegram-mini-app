@@ -145,7 +145,7 @@ def remove_background_and_center(image):
 
 
 # ============================================================
-# 3. DYNAMIC SF3D CUDA SOURCE PATCH
+# 3. FAIL-SAFE SF3D CUDA SOURCE PATCH
 # ============================================================
 
 _PATCH_LOCK = threading.Lock()
@@ -153,129 +153,131 @@ _PATCHED_METHODS = []
 
 
 def patch_query_triplane():
-    """Patch the installed SF3D query_triplane implementation."""
-    import sf3d.system as system_module
+    """
+    Fail-safe patcher for SF3D query_triplane implementation.
+    Catches any mismatch or error so startup never fails.
+    """
+    try:
+        import sf3d.system as system_module
 
-    with _PATCH_LOCK:
-        for _, method_name, owner in _PATCHED_METHODS:
-            if owner is system_module:
+        with _PATCH_LOCK:
+            for _, method_name, owner in _PATCHED_METHODS:
+                if owner is system_module:
+                    return
+
+            owners = []
+
+            for _, cls in inspect.getmembers(system_module, inspect.isclass):
+                method = getattr(cls, "query_triplane", None)
+                if callable(method):
+                    owners.append((cls, "query_triplane", method))
+
+            module_function = getattr(system_module, "query_triplane", None)
+            if callable(module_function):
+                owners.append((system_module, "query_triplane", module_function))
+
+            if not owners:
+                import sf3d
+                import pkgutil
+                import importlib
+
+                for item in pkgutil.walk_packages(
+                    sf3d.__path__, prefix="sf3d."
+                ):
+                    try:
+                        mod = importlib.import_module(item.name)
+                    except Exception:
+                        continue
+
+                    for _, cls in inspect.getmembers(mod, inspect.isclass):
+                        method = getattr(cls, "query_triplane", None)
+                        if callable(method):
+                            owners.append((cls, "query_triplane", method))
+
+            if not owners:
+                print("WARNING: Could not locate query_triplane(). Skipping patch safely.")
                 return
 
-        owners = []
+            patched_count = 0
 
-        for _, cls in inspect.getmembers(system_module, inspect.isclass):
-            method = getattr(cls, "query_triplane", None)
-            if callable(method):
-                owners.append((cls, "query_triplane", method))
-
-        module_function = getattr(system_module, "query_triplane", None)
-        if callable(module_function):
-            owners.append((system_module, "query_triplane", module_function))
-
-        if not owners:
-            import sf3d
-            import pkgutil
-            import importlib
-
-            for item in pkgutil.walk_packages(
-                sf3d.__path__, prefix="sf3d."
-            ):
-                try:
-                    mod = importlib.import_module(item.name)
-                except Exception:
+            for owner, method_name, original in owners:
+                if getattr(original, "_sf3d_cuda_patched", False):
+                    patched_count += 1
                     continue
 
-                for _, cls in inspect.getmembers(mod, inspect.isclass):
-                    method = getattr(cls, "query_triplane", None)
-                    if callable(method):
-                        owners.append((cls, "query_triplane", method))
+                try:
+                    source = inspect.getsource(original)
+                    source = textwrap.dedent(source)
+                except (OSError, TypeError):
+                    continue
 
-        if not owners:
-            raise RuntimeError(
-                "Could not locate query_triplane(). "
-                "The installed SF3D package layout may have changed."
-            )
+                if "positions = positions.to(device=triplanes.device)" in source:
+                    original._sf3d_cuda_patched = True
+                    patched_count += 1
+                    continue
 
-        patched_count = 0
+                lines = source.splitlines()
+                output = []
+                inserted = False
 
-        for owner, method_name, original in owners:
-            if getattr(original, "_sf3d_cuda_patched", False):
-                patched_count += 1
-                continue
+                for line in lines:
+                    if (
+                        not inserted
+                        and "grid_sample(" in line
+                        and "positions" in source
+                        and "triplanes" in source
+                    ):
+                        indent = line[:len(line) - len(line.lstrip())]
+                        output.append(
+                            indent
+                            + "positions = positions.to(device=triplanes.device)"
+                        )
+                        inserted = True
 
-            try:
-                source = inspect.getsource(original)
-                source = textwrap.dedent(source)
-            except (OSError, TypeError):
-                continue
+                    output.append(line)
 
-            if "positions = positions.to(device=triplanes.device)" in source:
-                original._sf3d_cuda_patched = True
-                patched_count += 1
-                continue
+                if not inserted:
+                    continue
 
-            lines = source.splitlines()
-            output = []
-            inserted = False
+                patched_source = "\n".join(output) + "\n"
 
-            for line in lines:
-                if (
-                    not inserted
-                    and "grid_sample(" in line
-                    and "positions" in source
-                    and "triplanes" in source
-                ):
-                    indent = line[:len(line) - len(line.lstrip())]
-                    output.append(
-                        indent
-                        + "positions = positions.to(device=triplanes.device)"
+                namespace = getattr(original, "__globals__", {})
+                namespace = dict(namespace)
+
+                try:
+                    exec(
+                        compile(
+                            patched_source,
+                            inspect.getsourcefile(original) or "<sf3d-patch>",
+                            "exec",
+                        ),
+                        namespace,
                     )
-                    inserted = True
 
-                output.append(line)
+                    replacement = namespace[method_name]
+                    replacement._sf3d_cuda_patched = True
 
-            if not inserted:
-                continue
+                    if inspect.ismethod(original):
+                        replacement = replacement.__get__(
+                            owner, owner if inspect.isclass(owner) else type(owner)
+                        )
 
-            patched_source = "\n".join(output) + "\n"
+                    setattr(owner, method_name, replacement)
+                    patched_count += 1
 
-            namespace = getattr(original, "__globals__", {})
-            namespace = dict(namespace)
+                except Exception as patch_exc:
+                    print(f"WARNING: Failed to apply patch sub-routine: {patch_exc}")
 
-            try:
-                exec(
-                    compile(
-                        patched_source,
-                        inspect.getsourcefile(original) or "<sf3d-patch>",
-                        "exec",
-                    ),
-                    namespace,
+            if patched_count > 0:
+                _PATCHED_METHODS.append(
+                    (system_module.__name__, "query_triplane", system_module)
                 )
+                print("Applied SF3D query_triplane device-sync patch successfully.")
+            else:
+                print("WARNING: query_triplane() found, but source structure did not match patch pattern. Continuing safely.")
 
-                replacement = namespace[method_name]
-                replacement._sf3d_cuda_patched = True
-
-                if inspect.ismethod(original):
-                    replacement = replacement.__get__(
-                        owner, owner if inspect.isclass(owner) else type(owner)
-                    )
-
-                setattr(owner, method_name, replacement)
-                patched_count += 1
-
-            except Exception as exc:
-                raise RuntimeError(
-                    f"Failed to patch {owner}.{method_name}"
-                ) from exc
-
-        if patched_count == 0:
-            raise RuntimeError(
-                "query_triplane() was found, but its source could not be safely patched."
-            )
-
-        _PATCHED_METHODS.append(
-            (system_module.__name__, "query_triplane", system_module)
-        )
+    except Exception as exc:
+        print(f"WARNING: patch_query_triplane encountered an exception, bypassing safely: {exc}")
 
 
 # ============================================================
@@ -303,6 +305,7 @@ class SF3DWorker:
 
         self.device = torch.device(GPU_DEVICE)
 
+        # Run fail-safe patcher
         patch_query_triplane()
 
         from sf3d.system import SF3D
@@ -333,15 +336,11 @@ class SF3DWorker:
 
         for name, parameter in self.model.named_parameters():
             if parameter.device != device:
-                raise RuntimeError(
-                    f"Parameter {name} remains on {parameter.device}"
-                )
+                parameter.data = parameter.data.to(device)
 
         for name, buffer in self.model.named_buffers():
             if buffer.device != device:
-                raise RuntimeError(
-                    f"Buffer {name} remains on {buffer.device}"
-                )
+                buffer.data = buffer.data.to(device)
 
         def check_input(value, name="input"):
             if torch.is_tensor(value) and value.device.type != "cuda":
@@ -464,4 +463,4 @@ def fastapi_app():
             ) from exc
 
     return web_app
-        
+                
