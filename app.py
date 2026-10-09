@@ -154,7 +154,6 @@ def cpu_safe_wrapper(fn):
     )
 
     image_base64 = item.get("image", "")
-    # Default to 2048 for high-fidelity texture realism, fallback if specified
     texture_resolution = int(item.get("texture_resolution", 2048))
     remesh_option = item.get("remesh", "quad")
 
@@ -188,6 +187,11 @@ def cpu_safe_wrapper(fn):
     elif remesh_option == "quad":
       remesh = "quad"
 
+    # FORCE DEVICE CONSISTENCY TO PREVENT CPU/CUDA MISMATCH ON SNAPSHOT RESTORE
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    self.model.to(device)
+
+    print("Running tensor inference forward pass cycle...")
     with torch.inference_mode():
       if torch.cuda.is_available():
         with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
@@ -226,3 +230,4 @@ def generate():
         return await model_instance.process_image.remote.aio(data)
 
     return web_app
+    
