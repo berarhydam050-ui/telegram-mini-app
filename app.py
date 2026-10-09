@@ -5,37 +5,22 @@ import sys
 import types
 import modal
 
-# 1. Pre-download weights into the Docker image during build time
-def download_weights_at_build():
-    from huggingface_hub import snapshot_download
-    from rembg import new_session
-
-    print("Pre-caching rembg u2net model into container image layer...")
-    new_session()
-
-    print("Pre-caching Stable Fast 3D model weights into container image layer...")
-    snapshot_download(
-        repo_id="stabilityai/stable-fast-3d",
-        allow_patterns=["*.txt", "*.json", "*.safetensors"]
-    )
-
-image = (
-    modal.Image.from_registry(
-        "rhydam12/sf3d-gpu-worker:latest",
-        add_python="3.10"
-    )
-    .run_function(download_weights_at_build)
+image = modal.Image.from_registry(
+    "rhydam12/sf3d-gpu-worker:latest",
+    add_python="3.10"
 )
 
 app = modal.App("sf3d-backend")
+models_volume = modal.Volume.from_name("sf3d-models-volume", create_if_missing=True)
 
 
 @app.cls(
     image=image,
     gpu="A10G",
     timeout=900,
-    scaledown_window=2,  # Shuts down 2 seconds after task completion (stops idle billing)
+    scaledown_window=2,  # Shuts down 2 seconds after task completion (zero idle cost)
     secrets=[modal.Secret.from_name("huggingface-secret")],
+    volumes={"/root/.cache": models_volume},
 )
 class SF3DModel:
 
@@ -43,6 +28,7 @@ class SF3DModel:
   def load_model(self):
     import torch
     import torch.cuda.amp
+    from huggingface_hub import login
 
     print("STARTING BACKEND INFRASTRUCTURE INITIALIZATION")
 
@@ -102,10 +88,35 @@ def cpu_safe_wrapper(fn):
         with open(baker_path, "w") as f:
           f.write(baker_code)
 
+    hf_token = os.environ.get("HF_TOKEN")
+    if not hf_token:
+      raise ValueError("HF_TOKEN variable is missing from runtime context container.")
+    print("Authenticating with Hugging Face Hub...")
+    login(token=hf_token)
+
+    u2net_path = "/root/.cache/rembg/u2net.onnx"
+    if not os.path.exists(u2net_path):
+      print("Cache Empty: Fetching rembg u2net.onnx asset weights to Volume...")
+      from rembg import new_session
+      temp_session = new_session() 
+      models_volume.commit() 
+      print("Rembg library baseline saved successfully!")
+
+    sf3d_path = "/root/.cache/huggingface/hub/models--stabilityai--stable-fast-3d"
+    if not os.path.exists(sf3d_path):
+      print("Cache Empty: Sourcing SF3D model configurations from Hugging Face...")
+      from huggingface_hub import snapshot_download
+      snapshot_download(
+          repo_id="stabilityai/stable-fast-3d",
+          allow_patterns=["*.txt", "*.json", "*.safetensors"]
+      )
+      models_volume.commit() 
+      print("SF3D system components stored inside your persistent cloud drive folder!")
+
     sys.path.append("/app/stable-fast-3d")
     from sf3d.system import SF3D
 
-    print("Loading network weights directly from container image layer to GPU...")
+    print("Loading network weights locally from mounted Volume disk folder...")
     self.model = SF3D.from_pretrained(
         "stabilityai/stable-fast-3d",
         config_name="config.yaml",
@@ -172,7 +183,7 @@ def cpu_safe_wrapper(fn):
     session = new_session()
     image = remove_background(image, session)
 
-    # Crop transparent borders for precise centering
+    # Crop transparent borders for precise framing
     bbox = image.getbbox()
     if bbox:
       image = image.crop(bbox)
