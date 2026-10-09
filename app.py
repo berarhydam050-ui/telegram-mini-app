@@ -55,7 +55,7 @@ class SF3DModel:
       with open(network_path, "w") as f:
         f.write(code)
 
-    # 2. Patch texture_baker C++ rasterize to run safely on CPU
+    # 2. Patch texture_baker C++ ops (interpolate AND rasterize) to run safely on CPU
     baker_path = "/opt/conda/lib/python3.10/site-packages/texture_baker/baker.py"
     if os.path.exists(baker_path):
       with open(baker_path, "r") as f:
@@ -79,6 +79,9 @@ def cpu_safe_wrapper(fn):
         baker_code = patch_header + baker_code.replace(
             "torch.ops.texture_baker_cpp.rasterize",
             "cpu_safe_wrapper(torch.ops.texture_baker_cpp.rasterize)"
+        ).replace(
+            "torch.ops.texture_baker_cpp.interpolate",
+            "cpu_safe_wrapper(torch.ops.texture_baker_cpp.interpolate)"
         )
         with open(baker_path, "w") as f:
           f.write(baker_code)
@@ -223,7 +226,7 @@ def generate():
     async def run_generate(request: Request):
         data = await request.json()
         model_instance = SF3DModel()
-        return model_instance.process_image.remote(data)
+        return await model_instance.process_image.remote.aio(data)
 
     return web_app
     
