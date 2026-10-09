@@ -19,19 +19,18 @@ models_volume = modal.Volume.from_name("sf3d-models-volume", create_if_missing=T
     gpu="A10G",
     timeout=900,
     scaledown_window=2,  # Shuts down instantly after task completion ($0.00 idle cost)
-    enable_memory_snapshot=True,
     secrets=[modal.Secret.from_name("huggingface-secret")],
     volumes={"/root/.cache": models_volume},
 )
 class SF3DModel:
 
-  @modal.enter(snap=True)
+  @modal.enter()
   def load_model(self):
     import torch
     import torch.cuda.amp
     from huggingface_hub import login
 
-    print("STARTING INITIALIZATION FOR ULTRA-REALISM SNAPSHOT")
+    print("STARTING STABLE BACKEND INITIALIZATION")
 
     # 1. Patch PyTorch AMP custom_fwd / custom_bwd kwargs
     def safe_custom_fwd(*args, **kwargs):
@@ -113,7 +112,7 @@ def cpu_safe_wrapper(fn):
     sys.path.append("/app/stable-fast-3d")
     from sf3d.system import SF3D
 
-    print("Loading network weights into memory for fast snapshot restore...")
+    print("Loading network weights from mounted Volume...")
     self.model = SF3D.from_pretrained(
         "stabilityai/stable-fast-3d",
         config_name="config.yaml",
@@ -122,7 +121,7 @@ def cpu_safe_wrapper(fn):
     device = "cuda" if torch.cuda.is_available() else "cpu"
     self.model.to(device)
     self.model.eval()
-    print("SNAPSHOT ENGINE READY")
+    print("PIPELINE ENGINE READY")
 
   @modal.method()
   def process_image(self, item: dict):
@@ -187,7 +186,6 @@ def cpu_safe_wrapper(fn):
     elif remesh_option == "quad":
       remesh = "quad"
 
-    # FORCE DEVICE CONSISTENCY TO PREVENT CPU/CUDA MISMATCH ON SNAPSHOT RESTORE
     device = "cuda" if torch.cuda.is_available() else "cpu"
     self.model.to(device)
 
