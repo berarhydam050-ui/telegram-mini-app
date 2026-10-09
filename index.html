@@ -43,6 +43,7 @@
             border-radius: 8px;
             display: none;
             margin-top: 10px;
+            object-fit: contain;
         }
         button {
             background-color: var(--tg-theme-button-color, #5288c1);
@@ -69,7 +70,7 @@
         model-viewer {
             width: 100%;
             max-width: 350px;
-            height: 320px;
+            height: 350px;
             background-color: #0e1621;
             border-radius: 12px;
             margin-top: 20px;
@@ -90,7 +91,15 @@
     <button id="generateBtn" onclick="generate3D()" disabled>Generate 3D Model</button>
     <div id="status"></div>
 
-    <model-viewer id="viewer" camera-controls auto-rotate shadow-intensity="1"></model-viewer>
+    <!-- Added studio environment lighting & exposure for hyper-realism -->
+    <model-viewer 
+        id="viewer" 
+        camera-controls 
+        auto-rotate 
+        shadow-intensity="1" 
+        exposure="1.2"
+        environment-image="https://modelviewer.dev/shared-assets/environments/neutral.hdr">
+    </model-viewer>
 
     <script>
         const Telegram = window.Telegram.WebApp;
@@ -99,7 +108,6 @@
 
         // Direct Modal GPU Webhook URL
         const MODAL_ENDPOINT = "https://berarhydam050--sf3d-backend-generate.modal.run";
-        
 
         let selectedBase64 = "";
 
@@ -107,26 +115,15 @@
             const file = event.target.files[0];
             if (!file) return;
 
-            const img = new Image();
             const reader = new FileReader();
-
             reader.onload = function(e) {
-                img.onload = function() {
-                    const canvas = document.createElement('canvas');
-                    const ctx = canvas.getContext('2d');
-                    canvas.width = 512;
-                    canvas.height = 512;
-                    ctx.drawImage(img, 0, 0, 512, 512);
+                selectedBase64 = e.target.result; // Retains full image quality and dimensions
 
-                    selectedBase64 = canvas.toDataURL('image/png');
-
-                    const previewImg = document.getElementById("preview-img");
-                    previewImg.src = selectedBase64;
-                    previewImg.style.display = "block";
-                    document.getElementById("uploadText").style.display = "none";
-                    document.getElementById("generateBtn").disabled = false;
-                };
-                img.src = e.target.result;
+                const previewImg = document.getElementById("preview-img");
+                previewImg.src = selectedBase64;
+                previewImg.style.display = "block";
+                document.getElementById("uploadText").style.display = "none";
+                document.getElementById("generateBtn").disabled = false;
             };
             reader.readAsDataURL(file);
         }
@@ -137,14 +134,18 @@
             const viewer = document.getElementById("viewer");
 
             btn.disabled = true;
-            status.innerText = "Processing image on GPU (takes ~5-10 seconds)...";
+            status.innerText = "Processing image on GPU (takes ~5-8s)...";
             viewer.style.display = "none";
 
             try {
                 const response = await fetch(MODAL_ENDPOINT, {
                     method: "POST",
                     headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify({ image: selectedBase64 })
+                    body: JSON.stringify({ 
+                        image: selectedBase64,
+                        texture_resolution: 2048, // Unlocks 2048px high-fidelity texture mapping
+                        remesh: "quad"            // Enforces clean quadrilateral polygon mesh
+                    })
                 });
 
                 const data = await response.json();
