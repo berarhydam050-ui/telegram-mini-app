@@ -20,7 +20,6 @@ models_volume = modal.Volume.from_name("sf3d-models-volume", create_if_missing=T
     timeout=900,
     scaledown_window=2,  # Shuts down instantly after task completion ($0.00 idle cost)
     enable_memory_snapshot=True,
-    experimental_options={"enable_gpu_snapshot": True},
     secrets=[modal.Secret.from_name("huggingface-secret")],
     volumes={"/root/.cache": models_volume},
 )
@@ -32,7 +31,7 @@ class SF3DModel:
     import torch.cuda.amp
     from huggingface_hub import login
 
-    print("STARTING INITIALIZATION FOR SNAPSHOT CACHE")
+    print("STARTING INITIALIZATION FOR ULTRA-REALISM SNAPSHOT")
 
     # 1. Patch PyTorch AMP custom_fwd / custom_bwd kwargs
     def safe_custom_fwd(*args, **kwargs):
@@ -98,14 +97,12 @@ def cpu_safe_wrapper(fn):
 
     u2net_path = "/root/.cache/rembg/u2net.onnx"
     if not os.path.exists(u2net_path):
-      print("Cache Empty: Fetching rembg u2net.onnx asset weights to Volume...")
       from rembg import new_session
-      temp_session = new_session() 
+      new_session() 
       models_volume.commit() 
 
     sf3d_path = "/root/.cache/huggingface/hub/models--stabilityai--stable-fast-3d"
     if not os.path.exists(sf3d_path):
-      print("Cache Empty: Sourcing SF3D model configurations from Hugging Face...")
       from huggingface_hub import snapshot_download
       snapshot_download(
           repo_id="stabilityai/stable-fast-3d",
@@ -116,7 +113,7 @@ def cpu_safe_wrapper(fn):
     sys.path.append("/app/stable-fast-3d")
     from sf3d.system import SF3D
 
-    print("Loading network weights into memory for snapshotting...")
+    print("Loading network weights into memory for fast snapshot restore...")
     self.model = SF3D.from_pretrained(
         "stabilityai/stable-fast-3d",
         config_name="config.yaml",
@@ -125,7 +122,7 @@ def cpu_safe_wrapper(fn):
     device = "cuda" if torch.cuda.is_available() else "cpu"
     self.model.to(device)
     self.model.eval()
-    print("SNAPSHOT PREPARATION COMPLETE")
+    print("SNAPSHOT ENGINE READY")
 
   @modal.method()
   def process_image(self, item: dict):
@@ -157,7 +154,8 @@ def cpu_safe_wrapper(fn):
     )
 
     image_base64 = item.get("image", "")
-    texture_resolution = item.get("texture_resolution", 1024)
+    # Default to 2048 for high-fidelity texture realism, fallback if specified
+    texture_resolution = int(item.get("texture_resolution", 2048))
     remesh_option = item.get("remesh", "quad")
 
     if "," in image_base64:
@@ -169,8 +167,8 @@ def cpu_safe_wrapper(fn):
     except Exception as e:
       return {"error": f"Invalid image payload: {e}"}
 
-    if str(texture_resolution) not in ["512", "1024", "2048"]:
-      texture_resolution = 1024
+    if texture_resolution not in [512, 1024, 2048]:
+      texture_resolution = 2048
       
     if str(remesh_option) not in ["none", "triangle", "quad"]:
       remesh_option = "quad"
@@ -193,9 +191,9 @@ def cpu_safe_wrapper(fn):
     with torch.inference_mode():
       if torch.cuda.is_available():
         with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
-          mesh, glob_dict = self.model.run_image(image, bake_resolution=int(texture_resolution), remesh=remesh)
+          mesh, glob_dict = self.model.run_image(image, bake_resolution=texture_resolution, remesh=remesh)
       else:
-        mesh, glob_dict = self.model.run_image(image, bake_resolution=int(texture_resolution), remesh=remesh)
+        mesh, glob_dict = self.model.run_image(image, bake_resolution=texture_resolution, remesh=remesh)
 
     output_path = "/tmp/output.glb"
     mesh.export(output_path, file_type="glb", include_normals=True)
@@ -228,4 +226,3 @@ def generate():
         return await model_instance.process_image.remote.aio(data)
 
     return web_app
-    
