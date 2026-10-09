@@ -1,5 +1,9 @@
 import os
+import sys
+import types
 import modal
+from fastapi import FastAPI, Request
+from fastapi.middleware.cors import CORSMiddleware
 
 image = modal.Image.from_registry(
     "rhydam12/sf3d-gpu-worker:latest",
@@ -7,9 +11,16 @@ image = modal.Image.from_registry(
 )
 
 app = modal.App("sf3d-backend")
-
 models_volume = modal.Volume.from_name("sf3d-models-volume", create_if_missing=True)
 
+web_app = FastAPI()
+web_app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 @app.cls(
     image=image,
@@ -23,30 +34,38 @@ class SF3DModel:
 
   @modal.enter()
   def load_model(self):
-    import os
     import torch
     import torch.cuda.amp
-    import torch.amp
     from huggingface_hub import login
 
     print("STARTING BACKEND INFRASTRUCTURE INITIALIZATION")
 
-    # Dynamic hotfix for torch.amp import compatibility
-    if not hasattr(torch.amp, "custom_bwd"):
-      torch.amp.custom_bwd = torch.cuda.amp.custom_bwd
-      torch.amp.custom_fwd = torch.cuda.amp.custom_fwd
+    # ------------------------------------------------------------
+    # DYNAMIC DECORATOR FIX FOR 'device_type' KEYWORD ERROR
+    # ------------------------------------------------------------
+    def safe_custom_fwd(*args, **kwargs):
+        kwargs.pop("device_type", None)
+        return torch.cuda.amp.custom_fwd(*args, **kwargs)
+
+    def safe_custom_bwd(*args, **kwargs):
+        kwargs.pop("device_type", None)
+        return torch.cuda.amp.custom_bwd(*args, **kwargs)
+
+    if not hasattr(torch, "amp"):
+        torch.amp = types.ModuleType("amp")
+
+    torch.amp.custom_fwd = safe_custom_fwd
+    torch.amp.custom_bwd = safe_custom_bwd
 
     network_path = "/app/stable-fast-3d/sf3d/models/network.py"
     if os.path.exists(network_path):
       with open(network_path, "r") as f:
         code = f.read()
-      if "from torch.amp import custom_bwd, custom_fwd" in code:
-        code = code.replace(
-            "from torch.amp import custom_bwd, custom_fwd",
-            "from torch.cuda.amp import custom_bwd, custom_fwd"
-        )
-        with open(network_path, "w") as f:
-          f.write(code)
+      code = code.replace("from torch.amp import custom_bwd, custom_fwd", "from torch.cuda.amp import custom_bwd, custom_fwd")
+      code = code.replace('device_type="cuda"', '')
+      code = code.replace("device_type='cuda'", '')
+      with open(network_path, "w") as f:
+        f.write(code)
 
     hf_token = os.environ.get("HF_TOKEN")
     if not hf_token:
@@ -73,7 +92,6 @@ class SF3DModel:
       models_volume.commit() 
       print("SF3D system components stored inside your persistent cloud drive folder!")
 
-    import sys
     sys.path.append("/app/stable-fast-3d")
     from sf3d.system import SF3D
 
@@ -88,21 +106,29 @@ class SF3DModel:
     self.model.eval()
     print("PIPELINE ENGINE READY")
 
-  @modal.fastapi_endpoint(method="POST")
-  def generate(self, item: dict):
+  @modal.method()
+  def process_image(self, item: dict):
     import base64
     import io
     import torch
     import torch.cuda.amp
-    import torch.amp
     from PIL import Image
     from rembg import new_session
 
-    if not hasattr(torch.amp, "custom_bwd"):
-      torch.amp.custom_bwd = torch.cuda.amp.custom_bwd
-      torch.amp.custom_fwd = torch.cuda.amp.custom_fwd
+    def safe_custom_fwd(*args, **kwargs):
+        kwargs.pop("device_type", None)
+        return torch.cuda.amp.custom_fwd(*args, **kwargs)
 
-    import sys
+    def safe_custom_bwd(*args, **kwargs):
+        kwargs.pop("device_type", None)
+        return torch.cuda.amp.custom_bwd(*args, **kwargs)
+
+    if not hasattr(torch, "amp"):
+        torch.amp = types.ModuleType("amp")
+
+    torch.amp.custom_fwd = safe_custom_fwd
+    torch.amp.custom_bwd = safe_custom_bwd
+
     sys.path.append("/app/stable-fast-3d")
     from sf3d.utils import (
         remove_background,
@@ -160,4 +186,16 @@ class SF3DModel:
       glb_bytes = f.read()
 
     return {"model": base64.b64encode(glb_bytes).decode("utf-8")}
-      
+
+
+@app.function(image=image)
+@modal.asgi_app()
+def generate():
+    @web_app.post("/")
+    async def run_generate(request: Request):
+        data = await request.json()
+        model_instance = SF3DModel()
+        return model_instance.process_image.remote(data)
+
+    return web_app
+        
