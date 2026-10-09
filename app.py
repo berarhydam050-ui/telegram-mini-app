@@ -24,11 +24,13 @@ image = (
         "setuptools==69.5.1",
         "wheel",
         "huggingface_hub",
+        "fastapi",
+        "uvicorn",
+        "python-multipart",
     )
-    .pip_install(
-        "torch==2.4.0",
-        "torchvision==0.19.0",
-        index_url="https://pytorch.org",
+    # 🚀 FIXED PYTORCH BUILD BLOCK: Runs standard installation parameters directly
+    .run_commands(
+        "pip install torch==2.4.0 torchvision==0.19.0 --index-url https://pytorch.org"
     )
     .workdir("/app")
     .run_commands("git clone https://github.com")
@@ -48,11 +50,6 @@ image = (
     )
     .run_commands("pip install ./texture_baker/ --no-build-isolation")
     .run_commands("pip install ./uv_unwrapper/ --no-build-isolation")
-    .pip_install(
-        "fastapi",
-        "uvicorn",
-        "python-multipart",
-    )
 )
 
 app = modal.App("sf3d-backend")
@@ -152,13 +149,11 @@ class SF3DModel:
     except Exception as e:
       return {"error": f"Failed to extract bitmap from data stream: {e}"}
 
-    # ✨ FIXED RESOLUTION SYNTAX WITH SAFE COMPATIBILITY LOGIC
     if str(texture_resolution) == "512" or str(texture_resolution) == "1024" or str(texture_resolution) == "2048":
       pass
     else:
       texture_resolution = 1024
       
-    # ✨ FIXED REMESH SYNTAX WITH SAFE COMPATIBILITY LOGIC
     if str(remesh_option) == "none" or str(remesh_option) == "triangle" or str(remesh_option) == "quad":
       pass
     else:
