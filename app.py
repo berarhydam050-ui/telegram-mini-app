@@ -1,466 +1,231 @@
 import base64
-import binascii
 import io
-import inspect
 import os
-import re
 import sys
-import textwrap
-import threading
-import traceback
-from typing import Any
-
+import types
 import modal
-
-
-# ============================================================
-# 1. MODAL CONFIGURATION
-# ============================================================
-
-APP_NAME = "sf3d-backend"
-VOLUME_NAME = "sf3d-models-volume"
-CACHE_DIR = "/root/.cache"
-
-MODEL_ID = "stabilityai/stable-fast-3d"
-GPU_DEVICE = "cuda:0"
-
-DEFAULT_TEXTURE_RESOLUTION = 2048
-MAX_IMAGE_PIXELS = 40_000_000
-FOREGROUND_SCALE = 0.85
-
-REMESH_MODE = os.environ.get("SF3D_REMESH_MODE", "quad")
-
-app = modal.App(APP_NAME)
-
-models_volume = modal.Volume.from_name(
-    VOLUME_NAME,
-    create_if_missing=True,
-)
 
 image = modal.Image.from_registry(
     "rhydam12/sf3d-gpu-worker:latest",
-    add_python="3.10",
+    add_python="3.10"
 )
 
+app = modal.App("sf3d-backend")
+models_volume = modal.Volume.from_name("sf3d-models-volume", create_if_missing=True)
 
-# ============================================================
-# 2. IMAGE DECODING AND PREPROCESSING
-# ============================================================
-
-def decode_image(data: Any):
-    """Decode base64 input safely and normalize EXIF orientation."""
-    from PIL import Image, ImageOps
-
-    if isinstance(data, dict):
-        data = (
-            data.get("image")
-            or data.get("image_base64")
-            or data.get("imageBase64")
-        )
-
-    if not isinstance(data, str) or not data.strip():
-        raise ValueError("Provide an image as a base64 string.")
-
-    if data.startswith("data:"):
-        header, separator, data = data.partition(",")
-        if not separator or ";base64" not in header.lower():
-            raise ValueError("Invalid base64 data URI.")
-
-    if len(data) > 180_000_000:
-        raise ValueError("Encoded image exceeds the input limit.")
-
-    try:
-        raw = base64.b64decode(data, validate=True)
-    except (binascii.Error, ValueError) as exc:
-        raise ValueError("Invalid base64 image data.") from exc
-
-    if not raw:
-        raise ValueError("The uploaded image is empty.")
-
-    try:
-        with Image.open(io.BytesIO(raw)) as source:
-            width, height = source.size
-
-            if width <= 0 or height <= 0:
-                raise ValueError("Invalid image dimensions.")
-
-            if width * height > MAX_IMAGE_PIXELS:
-                raise ValueError("Image exceeds the 40-megapixel limit.")
-
-            source.load()
-            result = ImageOps.exif_transpose(source).convert("RGBA")
-    except ValueError:
-        raise
-    except Exception as exc:
-        raise ValueError("Could not decode the uploaded image.") from exc
-
-    return result
-
-
-def remove_background_and_center(image):
-    """Remove the background and fit the foreground on a square canvas."""
-    from PIL import Image
-
-    from rembg import new_session, remove
-
-    session = getattr(remove_background_and_center, "_session", None)
-
-    if session is None:
-        session = new_session("u2net")
-        remove_background_and_center._session = session
-
-    rgba = remove(image, session=session).convert("RGBA")
-    alpha = rgba.getchannel("A")
-    bbox = alpha.getbbox()
-
-    if bbox is None:
-        raise ValueError("No foreground subject was detected.")
-
-    foreground = rgba.crop(bbox)
-
-    side = max(foreground.width, foreground.height)
-    target_side = max(1, int(side * FOREGROUND_SCALE))
-
-    scale = target_side / max(foreground.width, foreground.height)
-    new_size = (
-        max(1, int(foreground.width * scale)),
-        max(1, int(foreground.height * scale)),
-    )
-
-    foreground = foreground.resize(
-        new_size,
-        Image.Resampling.LANCZOS,
-    )
-
-    canvas_side = max(new_size)
-    canvas = Image.new("RGBA", (canvas_side, canvas_side), (0, 0, 0, 0))
-
-    position = (
-        (canvas_side - foreground.width) // 2,
-        (canvas_side - foreground.height) // 2,
-    )
-    canvas.alpha_composite(foreground, dest=position)
-
-    return canvas
-
-
-# ============================================================
-# 3. FAIL-SAFE SF3D CUDA SOURCE PATCH
-# ============================================================
-
-_PATCH_LOCK = threading.Lock()
-_PATCHED_METHODS = []
-
-
-def patch_query_triplane():
-    """
-    Fail-safe patcher for SF3D query_triplane implementation.
-    Catches any mismatch or error so startup never fails.
-    """
-    try:
-        import sf3d.system as system_module
-
-        with _PATCH_LOCK:
-            for _, method_name, owner in _PATCHED_METHODS:
-                if owner is system_module:
-                    return
-
-            owners = []
-
-            for _, cls in inspect.getmembers(system_module, inspect.isclass):
-                method = getattr(cls, "query_triplane", None)
-                if callable(method):
-                    owners.append((cls, "query_triplane", method))
-
-            module_function = getattr(system_module, "query_triplane", None)
-            if callable(module_function):
-                owners.append((system_module, "query_triplane", module_function))
-
-            if not owners:
-                import sf3d
-                import pkgutil
-                import importlib
-
-                for item in pkgutil.walk_packages(
-                    sf3d.__path__, prefix="sf3d."
-                ):
-                    try:
-                        mod = importlib.import_module(item.name)
-                    except Exception:
-                        continue
-
-                    for _, cls in inspect.getmembers(mod, inspect.isclass):
-                        method = getattr(cls, "query_triplane", None)
-                        if callable(method):
-                            owners.append((cls, "query_triplane", method))
-
-            if not owners:
-                print("WARNING: Could not locate query_triplane(). Skipping patch safely.")
-                return
-
-            patched_count = 0
-
-            for owner, method_name, original in owners:
-                if getattr(original, "_sf3d_cuda_patched", False):
-                    patched_count += 1
-                    continue
-
-                try:
-                    source = inspect.getsource(original)
-                    source = textwrap.dedent(source)
-                except (OSError, TypeError):
-                    continue
-
-                if "positions = positions.to(device=triplanes.device)" in source:
-                    original._sf3d_cuda_patched = True
-                    patched_count += 1
-                    continue
-
-                lines = source.splitlines()
-                output = []
-                inserted = False
-
-                for line in lines:
-                    if (
-                        not inserted
-                        and "grid_sample(" in line
-                        and "positions" in source
-                        and "triplanes" in source
-                    ):
-                        indent = line[:len(line) - len(line.lstrip())]
-                        output.append(
-                            indent
-                            + "positions = positions.to(device=triplanes.device)"
-                        )
-                        inserted = True
-
-                    output.append(line)
-
-                if not inserted:
-                    continue
-
-                patched_source = "\n".join(output) + "\n"
-
-                namespace = getattr(original, "__globals__", {})
-                namespace = dict(namespace)
-
-                try:
-                    exec(
-                        compile(
-                            patched_source,
-                            inspect.getsourcefile(original) or "<sf3d-patch>",
-                            "exec",
-                        ),
-                        namespace,
-                    )
-
-                    replacement = namespace[method_name]
-                    replacement._sf3d_cuda_patched = True
-
-                    if inspect.ismethod(original):
-                        replacement = replacement.__get__(
-                            owner, owner if inspect.isclass(owner) else type(owner)
-                        )
-
-                    setattr(owner, method_name, replacement)
-                    patched_count += 1
-
-                except Exception as patch_exc:
-                    print(f"WARNING: Failed to apply patch sub-routine: {patch_exc}")
-
-            if patched_count > 0:
-                _PATCHED_METHODS.append(
-                    (system_module.__name__, "query_triplane", system_module)
-                )
-                print("Applied SF3D query_triplane device-sync patch successfully.")
-            else:
-                print("WARNING: query_triplane() found, but source structure did not match patch pattern. Continuing safely.")
-
-    except Exception as exc:
-        print(f"WARNING: patch_query_triplane encountered an exception, bypassing safely: {exc}")
-
-
-# ============================================================
-# 4. MODAL SF3D WORKER
-# ============================================================
 
 @app.cls(
     image=image,
     gpu="A10G",
-    volumes={CACHE_DIR: models_volume},
-    scaledown_window=2,
+    timeout=900,
+    scaledown_window=2,  # Shuts down instantly after task completion ($0.00 idle cost)
     enable_memory_snapshot=True,
     experimental_options={"enable_gpu_snapshot": True},
-    timeout=900,
-    max_containers=5,
+    secrets=[modal.Secret.from_name("huggingface-secret")],
+    volumes={"/root/.cache": models_volume},
 )
-class SF3DWorker:
+class SF3DModel:
 
-    @modal.enter(snap=True)
-    def load_model(self):
-        import torch
+  @modal.enter(snap=True)
+  def load_model(self):
+    import torch
+    import torch.cuda.amp
+    from huggingface_hub import login
 
-        if not torch.cuda.is_available():
-            raise RuntimeError("CUDA is unavailable in the worker.")
+    print("STARTING INITIALIZATION FOR SNAPSHOT CACHE")
 
-        self.device = torch.device(GPU_DEVICE)
+    # 1. Patch PyTorch AMP custom_fwd / custom_bwd kwargs
+    def safe_custom_fwd(*args, **kwargs):
+        kwargs.pop("device_type", None)
+        return torch.cuda.amp.custom_fwd(*args, **kwargs)
 
-        # Run fail-safe patcher
-        patch_query_triplane()
+    def safe_custom_bwd(*args, **kwargs):
+        kwargs.pop("device_type", None)
+        return torch.cuda.amp.custom_bwd(*args, **kwargs)
 
-        from sf3d.system import SF3D
-        from rembg import new_session
+    if not hasattr(torch, "amp"):
+        torch.amp = types.ModuleType("amp")
 
-        self.model = SF3D.from_pretrained(MODEL_ID)
-        self.model.eval()
-        self.model.to(self.device)
+    torch.amp.custom_fwd = safe_custom_fwd
+    torch.amp.custom_bwd = safe_custom_bwd
 
-        remove_background_and_center._session = new_session("u2net")
-        models_volume.commit()
+    network_path = "/app/stable-fast-3d/sf3d/models/network.py"
+    if os.path.exists(network_path):
+      with open(network_path, "r") as f:
+        code = f.read()
+      code = code.replace("from torch.amp import custom_bwd, custom_fwd", "from torch.cuda.amp import custom_bwd, custom_fwd")
+      code = code.replace('device_type="cuda"', '')
+      code = code.replace("device_type='cuda'", '')
+      with open(network_path, "w") as f:
+        f.write(code)
 
-        self._enforce_cuda()
-        torch.cuda.synchronize(self.device)
+    # 2. Patch texture_baker C++ ops to run safely on CPU
+    baker_path = "/opt/conda/lib/python3.10/site-packages/texture_baker/baker.py"
+    if os.path.exists(baker_path):
+      with open(baker_path, "r") as f:
+        baker_code = f.read()
+      if "cpu_safe_wrapper" not in baker_code:
+        patch_header = """import torch
 
-    def _enforce_cuda(self, *inputs):
-        import torch
+def cpu_safe_wrapper(fn):
+    def wrapper(*args, **kwargs):
+        args_cpu = [a.cpu() if isinstance(a, torch.Tensor) else a for a in args]
+        kwargs_cpu = {k: (v.cpu() if isinstance(v, torch.Tensor) else v) for k, v in kwargs.items()}
+        res = fn(*args_cpu, **kwargs_cpu)
+        if isinstance(res, torch.Tensor):
+            return res.cuda()
+        if isinstance(res, (tuple, list)):
+            return type(res)(x.cuda() if isinstance(x, torch.Tensor) else x for x in res)
+        return res
+    return wrapper
 
-        if not torch.cuda.is_available():
-            raise RuntimeError("CUDA is unavailable after worker startup.")
+"""
+        baker_code = patch_header + baker_code.replace(
+            "torch.ops.texture_baker_cpp.rasterize",
+            "cpu_safe_wrapper(torch.ops.texture_baker_cpp.rasterize)"
+        ).replace(
+            "torch.ops.texture_baker_cpp.interpolate",
+            "cpu_safe_wrapper(torch.ops.texture_baker_cpp.interpolate)"
+        )
+        with open(baker_path, "w") as f:
+          f.write(baker_code)
 
-        device = torch.device(GPU_DEVICE)
+    hf_token = os.environ.get("HF_TOKEN")
+    if not hf_token:
+      raise ValueError("HF_TOKEN variable is missing from runtime context container.")
+    print("Authenticating with Hugging Face Hub...")
+    login(token=hf_token)
 
-        if self.device != device:
-            self.device = device
+    u2net_path = "/root/.cache/rembg/u2net.onnx"
+    if not os.path.exists(u2net_path):
+      print("Cache Empty: Fetching rembg u2net.onnx asset weights to Volume...")
+      from rembg import new_session
+      temp_session = new_session() 
+      models_volume.commit() 
 
-        self.model.to(device)
+    sf3d_path = "/root/.cache/huggingface/hub/models--stabilityai--stable-fast-3d"
+    if not os.path.exists(sf3d_path):
+      print("Cache Empty: Sourcing SF3D model configurations from Hugging Face...")
+      from huggingface_hub import snapshot_download
+      snapshot_download(
+          repo_id="stabilityai/stable-fast-3d",
+          allow_patterns=["*.txt", "*.json", "*.safetensors"]
+      )
+      models_volume.commit() 
 
-        for name, parameter in self.model.named_parameters():
-            if parameter.device != device:
-                parameter.data = parameter.data.to(device)
+    sys.path.append("/app/stable-fast-3d")
+    from sf3d.system import SF3D
 
-        for name, buffer in self.model.named_buffers():
-            if buffer.device != device:
-                buffer.data = buffer.data.to(device)
+    print("Loading network weights into memory for snapshotting...")
+    self.model = SF3D.from_pretrained(
+        "stabilityai/stable-fast-3d",
+        config_name="config.yaml",
+        weight_name="model.safetensors",
+    )
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    self.model.to(device)
+    self.model.eval()
+    print("SNAPSHOT PREPARATION COMPLETE")
 
-        def check_input(value, name="input"):
-            if torch.is_tensor(value) and value.device.type != "cuda":
-                raise RuntimeError(
-                    f"{name} is on {value.device}; expected CUDA."
-                )
+  @modal.method()
+  def process_image(self, item: dict):
+    import base64
+    import io
+    import torch
+    import torch.cuda.amp
+    from PIL import Image
+    from rembg import new_session
 
-            if isinstance(value, dict):
-                for key, item in value.items():
-                    check_input(item, f"{name}.{key}")
-            elif isinstance(value, (tuple, list)):
-                for index, item in enumerate(value):
-                    check_input(item, f"{name}[{index}]")
+    def safe_custom_fwd(*args, **kwargs):
+        kwargs.pop("device_type", None)
+        return torch.cuda.amp.custom_fwd(*args, **kwargs)
 
-        for index, value in enumerate(inputs):
-            check_input(value, f"input[{index}]")
+    def safe_custom_bwd(*args, **kwargs):
+        kwargs.pop("device_type", None)
+        return torch.cuda.amp.custom_bwd(*args, **kwargs)
 
-        torch.cuda.synchronize(device)
+    if not hasattr(torch, "amp"):
+        torch.amp = types.ModuleType("amp")
 
-    @modal.method()
-    def process_image(self, data):
-        import torch
+    torch.amp.custom_fwd = safe_custom_fwd
+    torch.amp.custom_bwd = safe_custom_bwd
 
-        original = decode_image(data)
-        processed = remove_background_and_center(original)
+    sys.path.append("/app/stable-fast-3d")
+    from sf3d.utils import (
+        remove_background,
+        resize_foreground,
+    )
 
-        self._enforce_cuda()
+    image_base64 = item.get("image", "")
+    texture_resolution = item.get("texture_resolution", 1024)
+    remesh_option = item.get("remesh", "quad")
 
-        try:
-            with torch.inference_mode():
-                with torch.autocast(
-                    device_type="cuda",
-                    dtype=torch.bfloat16,
-                ):
-                    mesh, _ = self.model.run_image(
-                        processed,
-                        bake_resolution=DEFAULT_TEXTURE_RESOLUTION,
-                        remesh=REMESH_MODE,
-                    )
+    if "," in image_base64:
+      image_base64 = image_base64.split(",", 1)[1]
 
-            self._enforce_cuda()
+    try:
+      image_bytes = base64.b64decode(image_base64)
+      image = Image.open(io.BytesIO(image_bytes)).convert("RGBA")
+    except Exception as e:
+      return {"error": f"Invalid image payload: {e}"}
 
-            output = io.BytesIO()
-            mesh.export(output, file_type="glb")
-            glb_bytes = output.getvalue()
+    if str(texture_resolution) not in ["512", "1024", "2048"]:
+      texture_resolution = 1024
+      
+    if str(remesh_option) not in ["none", "triangle", "quad"]:
+      remesh_option = "quad"
 
-            if not glb_bytes:
-                raise RuntimeError("SF3D returned an empty GLB.")
+    session = new_session()
+    image = remove_background(image, session)
 
-            encoded = base64.b64encode(glb_bytes).decode("ascii")
+    bbox = image.getbbox()
+    if bbox:
+      image = image.crop(bbox)
 
-            return {
-                "success": True,
-                "format": "glb",
-                "mime_type": "model/gltf-binary",
-                "model_base64": encoded,
-                "texture_resolution": DEFAULT_TEXTURE_RESOLUTION,
-                "remesh": REMESH_MODE,
-            }
+    image = resize_foreground(image, 0.85)
 
-        except Exception:
-            traceback.print_exc()
-            raise
+    remesh = None
+    if remesh_option == "triangle":
+      remesh = "triangle"
+    elif remesh_option == "quad":
+      remesh = "quad"
+
+    with torch.inference_mode():
+      if torch.cuda.is_available():
+        with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
+          mesh, glob_dict = self.model.run_image(image, bake_resolution=int(texture_resolution), remesh=remesh)
+      else:
+        mesh, glob_dict = self.model.run_image(image, bake_resolution=int(texture_resolution), remesh=remesh)
+
+    output_path = "/tmp/output.glb"
+    mesh.export(output_path, file_type="glb", include_normals=True)
+
+    with open(output_path, "rb") as f:
+      glb_bytes = f.read()
+
+    return {"model": base64.b64encode(glb_bytes).decode("utf-8")}
 
 
-# ============================================================
-# 5. FASTAPI ASGI WEBHOOK (LAZILY IMPORTED)
-# ============================================================
-
-@app.function(
-    image=image,
-    scaledown_window=2,
-)
+@app.function(image=image)
 @modal.asgi_app()
-def fastapi_app():
-    from fastapi import FastAPI, HTTPException
+def generate():
+    from fastapi import FastAPI, Request
     from fastapi.middleware.cors import CORSMiddleware
-    from pydantic import BaseModel, Field
 
-    web_app = FastAPI(title="SF3D Image-to-3D API")
-
+    web_app = FastAPI()
     web_app.add_middleware(
         CORSMiddleware,
         allow_origins=["*"],
-        allow_credentials=False,
-        allow_methods=["POST", "GET", "OPTIONS"],
+        allow_credentials=True,
+        allow_methods=["*"],
         allow_headers=["*"],
     )
 
-    class GenerateRequest(BaseModel):
-        image: str = Field(
-            ...,
-            description="Base64 image or data:image/...;base64 URI",
-        )
-
-    @web_app.get("/health")
-    async def health():
-        return {
-            "status": "ok",
-            "service": APP_NAME,
-            "model": MODEL_ID,
-        }
-
-    @web_app.post("/generate")
-    async def generate(request: GenerateRequest):
-        try:
-            result = await SF3DWorker().process_image.remote.aio(
-                {"image": request.image}
-            )
-            return result
-
-        except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-
-        except Exception as exc:
-            traceback.print_exc()
-            raise HTTPException(
-                status_code=500,
-                detail=f"SF3D generation failed: {type(exc).__name__}: {exc}",
-            ) from exc
+    @web_app.post("/")
+    async def run_generate(request: Request):
+        data = await request.json()
+        model_instance = SF3DModel()
+        return await model_instance.process_image.remote.aio(data)
 
     return web_app
-                
+    
