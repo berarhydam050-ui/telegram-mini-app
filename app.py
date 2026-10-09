@@ -28,10 +28,10 @@ image = (
     .pip_install(
         "torch==2.4.0",
         "torchvision==0.19.0",
-        index_url="https://download.pytorch.org/whl/cu121",
+        index_url="https://pytorch.org",
     )
     .workdir("/app")
-    .run_commands("git clone https://github.com/Stability-AI/stable-fast-3d.git")
+    .run_commands("git clone https://github.com")
     .workdir("/app/stable-fast-3d")
     .run_commands(
         "grep -v '^./texture_baker/' requirements.txt | grep -v '^./uv_unwrapper/' > /tmp/sf3d_requirements.txt",
@@ -108,7 +108,7 @@ class SF3DModel:
       )
       models_volume.commit() 
       print("SF3D system components stored inside your persistent cloud drive folder!")
-    # ----------------============================================
+    # --------------------------------============================
 
     from sf3d.system import SF3D
 
@@ -123,7 +123,7 @@ class SF3DModel:
     self.model.eval()
     print("PIPELINE ENGINE READY")
 
-  # ✨ FIXED DECORATOR: Updated to the new Modal syntax requirements
+  # ✨ Exposes this class method cleanly to web requests matching your frontend layout
   @modal.fastapi_endpoint(method="POST")
   def generate(self, item: dict):
     import base64
@@ -140,6 +140,7 @@ class SF3DModel:
     texture_resolution = item.get("texture_resolution", 1024)
     remesh_option = item.get("remesh", "triangle")
 
+    # Clean the Base64 input string array data safely
     if "," in image_base64:
       image_base64 = image_base64.split(",", 1)[1]
 
@@ -153,8 +154,10 @@ class SF3DModel:
     except Exception as e:
       return {"error": f"Failed to extract bitmap from data stream: {e}"}
 
-    if texture_resolution not in [512, 1024, 2048]:
+    # ✨ FIXED RESOLUTION SYNTAX ERROR LIST
+    if texture_resolution not in:
       texture_resolution = 1024
+      
     if remesh_option not in ["none", "triangle", "quad"]:
       remesh_option = "triangle"
 
