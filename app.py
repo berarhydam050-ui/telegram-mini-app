@@ -114,20 +114,42 @@ class SF3DModel:
 
         self.device = torch.device(GPU_DEVICE)
 
-        # Fix torch.amp import error directly in Python runtime memory
-        if hasattr(torch, "amp"):
-            torch.amp.custom_fwd = getattr(torch.amp, "custom_fwd", torch.cuda.amp.custom_fwd)
-            torch.amp.custom_bwd = getattr(torch.amp, "custom_bwd", torch.cuda.amp.custom_bwd)
-        else:
+        # 1. Safe AMP Decorator Wrapper (Strips incompatible 'device_type' kwargs)
+        _orig_custom_fwd = torch.cuda.amp.custom_fwd
+        _orig_custom_bwd = torch.cuda.amp.custom_bwd
+
+        def safe_custom_fwd(*args, **kwargs):
+            kwargs.pop("device_type", None)
+            return _orig_custom_fwd(*args, **kwargs)
+
+        def safe_custom_bwd(*args, **kwargs):
+            kwargs.pop("device_type", None)
+            return _orig_custom_bwd(*args, **kwargs)
+
+        if not hasattr(torch, "amp"):
             torch.amp = types.ModuleType("amp")
-            torch.amp.custom_fwd = torch.cuda.amp.custom_fwd
-            torch.amp.custom_bwd = torch.cuda.amp.custom_bwd
+
+        torch.amp.custom_fwd = safe_custom_fwd
+        torch.amp.custom_bwd = safe_custom_bwd
+        torch.cuda.amp.custom_fwd = safe_custom_fwd
+        torch.cuda.amp.custom_bwd = safe_custom_bwd
+
+        # 2. File Patch for network.py
+        network_path = "/app/stable-fast-3d/sf3d/models/network.py"
+        if os.path.exists(network_path):
+            with open(network_path, "r") as f:
+                code = f.read()
+            code = code.replace("from torch.amp import custom_bwd, custom_fwd", "from torch.cuda.amp import custom_bwd, custom_fwd")
+            code = code.replace('device_type="cuda"', '')
+            code = code.replace("device_type='cuda'", '')
+            with open(network_path, "w") as f:
+                f.write(code)
 
         hf_token = os.environ.get("HF_TOKEN") or os.environ.get("HUGGINGFACE_TOKEN")
         if hf_token:
             login(token=hf_token)
 
-        # CPU Safe Wrapper for texture_baker C++ ops
+        # 3. CPU Safe Wrapper for texture_baker C++ ops
         baker_path = "/opt/conda/lib/python3.10/site-packages/texture_baker/baker.py"
         if os.path.exists(baker_path):
             with open(baker_path, "r") as f:
@@ -170,10 +192,23 @@ class SF3DModel:
         import torch
         import torch.cuda.amp
 
-        # Re-apply memory patch on wake-up
-        if hasattr(torch, "amp"):
-            torch.amp.custom_fwd = getattr(torch.amp, "custom_fwd", torch.cuda.amp.custom_fwd)
-            torch.amp.custom_bwd = getattr(torch.amp, "custom_bwd", torch.cuda.amp.custom_bwd)
+        # Re-enforce safe wrappers on container wake-up
+        _orig_custom_fwd = getattr(torch.cuda.amp, "_orig_custom_fwd", torch.cuda.amp.custom_fwd)
+        _orig_custom_bwd = getattr(torch.cuda.amp, "_orig_custom_bwd", torch.cuda.amp.custom_bwd)
+
+        def safe_custom_fwd(*args, **kwargs):
+            kwargs.pop("device_type", None)
+            return _orig_custom_fwd(*args, **kwargs)
+
+        def safe_custom_bwd(*args, **kwargs):
+            kwargs.pop("device_type", None)
+            return _orig_custom_bwd(*args, **kwargs)
+
+        if not hasattr(torch, "amp"):
+            torch.amp = types.ModuleType("amp")
+
+        torch.amp.custom_fwd = safe_custom_fwd
+        torch.amp.custom_bwd = safe_custom_bwd
 
         if torch.cuda.is_available():
             torch.set_default_device("cuda")
