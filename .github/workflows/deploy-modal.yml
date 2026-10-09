@@ -28,6 +28,5 @@ jobs:
           MODAL_TOKEN_SECRET: ${{ secrets.MODAL_TOKEN_SECRET }}
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
         run: |
-          modal secret create huggingface-secret HF_TOKEN=$HF_TOKEN --force
           modal deploy app.py
           
