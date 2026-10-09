@@ -1,10 +1,6 @@
 import os
 import modal
 
-# ============================================================
-# 🚀 FIX: PULL DIRECTLY FROM YOUR PRE-BUILT DOCKER HUB WORKER
-# ============================================================
-# This completely bypasses the pip compilation errors on GitHub Actions!
 image = modal.Image.from_registry(
     "rhydam12/sf3d-gpu-worker:latest",
     add_python="3.10"
@@ -12,9 +8,6 @@ image = modal.Image.from_registry(
 
 app = modal.App("sf3d-backend")
 
-# ============================================================
-# AUTONOMOUS MODULAR CACHE STORAGE VOLUME
-# ============================================================
 models_volume = modal.Volume.from_name("sf3d-models-volume", create_if_missing=True)
 
 
@@ -32,19 +25,35 @@ class SF3DModel:
   def load_model(self):
     import os
     import torch
+    import torch.cuda.amp
+    import torch.amp
     from huggingface_hub import login
 
     print("STARTING BACKEND INFRASTRUCTURE INITIALIZATION")
-    
+
+    # Dynamic hotfix for torch.amp import compatibility
+    if not hasattr(torch.amp, "custom_bwd"):
+      torch.amp.custom_bwd = torch.cuda.amp.custom_bwd
+      torch.amp.custom_fwd = torch.cuda.amp.custom_fwd
+
+    network_path = "/app/stable-fast-3d/sf3d/models/network.py"
+    if os.path.exists(network_path):
+      with open(network_path, "r") as f:
+        code = f.read()
+      if "from torch.amp import custom_bwd, custom_fwd" in code:
+        code = code.replace(
+            "from torch.amp import custom_bwd, custom_fwd",
+            "from torch.cuda.amp import custom_bwd, custom_fwd"
+        )
+        with open(network_path, "w") as f:
+          f.write(code)
+
     hf_token = os.environ.get("HF_TOKEN")
     if not hf_token:
       raise ValueError("HF_TOKEN variable is missing from runtime context container.")
     print("Authenticating with Hugging Face Hub...")
     login(token=hf_token)
 
-    # ----------------============================================
-    # PERSISTENT CACHE COMPONENT ROUTINES
-    # ------------------------------------------------============
     u2net_path = "/root/.cache/rembg/u2net.onnx"
     if not os.path.exists(u2net_path):
       print("Cache Empty: Fetching rembg u2net.onnx asset weights to Volume...")
@@ -63,9 +72,7 @@ class SF3DModel:
       )
       models_volume.commit() 
       print("SF3D system components stored inside your persistent cloud drive folder!")
-    # --------------------------------============================
 
-    # Import directly from the pre-installed repository path in your worker image
     import sys
     sys.path.append("/app/stable-fast-3d")
     from sf3d.system import SF3D
@@ -86,9 +93,15 @@ class SF3DModel:
     import base64
     import io
     import torch
+    import torch.cuda.amp
+    import torch.amp
     from PIL import Image
     from rembg import new_session
-    
+
+    if not hasattr(torch.amp, "custom_bwd"):
+      torch.amp.custom_bwd = torch.cuda.amp.custom_bwd
+      torch.amp.custom_fwd = torch.cuda.amp.custom_fwd
+
     import sys
     sys.path.append("/app/stable-fast-3d")
     from sf3d.utils import (
@@ -113,14 +126,10 @@ class SF3DModel:
     except Exception as e:
       return {"error": f"Failed to extract bitmap from data stream: {e}"}
 
-    if str(texture_resolution) == "512" or str(texture_resolution) == "1024" or str(texture_resolution) == "2048":
-      pass
-    else:
+    if str(texture_resolution) not in ["512", "1024", "2048"]:
       texture_resolution = 1024
       
-    if str(remesh_option) == "none" or str(remesh_option) == "triangle" or str(remesh_option) == "quad":
-      pass
-    else:
+    if str(remesh_option) not in ["none", "triangle", "quad"]:
       remesh_option = "triangle"
 
     print("Executing background stripping...")
