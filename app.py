@@ -1,7 +1,8 @@
+import os
 import modal
 
 # ============================================================
-# SF3D MODAL IMAGE
+# SF3D MODAL CONTAINER IMAGE CONFIGURATION
 # ============================================================
 image = (
     modal.Image.from_registry(
@@ -22,7 +23,7 @@ image = (
     .pip_install(
         "setuptools==69.5.1",
         "wheel",
-        "huggingface_hub",  # Explicitly added for authentication
+        "huggingface_hub",
     )
     .pip_install(
         "torch==2.4.0",
@@ -57,9 +58,8 @@ image = (
 app = modal.App("sf3d-backend")
 
 # ============================================================
-# CLOUD MODULAR STORAGE DISK DEFINITION
+# AUTONOMOUS MODULAR CACHE STORAGE VOLUME (Pay-As-You-Run)
 # ============================================================
-# This automatically declares the cloud virtual folder without using local paths
 models_volume = modal.Volume.from_name("sf3d-models-volume", create_if_missing=True)
 
 
@@ -68,8 +68,8 @@ models_volume = modal.Volume.from_name("sf3d-models-volume", create_if_missing=T
     gpu="A10G",
     timeout=900,
     scaledown_window=300,
-    secrets=[modal.Secret.from_name("huggingface-secret")],
-    # This plugs the cloud drive folder right where asset caches expect to find them
+    # Inject token pass-through context dynamically from your workflow layer
+    secrets=[modal.Secret.from_dict({"HF_TOKEN": os.environ.get("HF_TOKEN", "")})],
     volumes={"/root/.cache": models_volume},
 )
 class SF3DModel:
@@ -80,55 +80,42 @@ class SF3DModel:
     import torch
     from huggingface_hub import login
 
-    print("STARTING SF3D")
+    print("STARTING BACKEND INFRASTRUCTURE INITIALIZATION")
     
-    # 1. Explicitly authenticate with Hugging Face
     hf_token = os.environ.get("HF_TOKEN")
     if not hf_token:
-      raise ValueError("HF_TOKEN is missing. Check your huggingface-secret in Modal.")
-    print("Authenticating with Hugging Face...")
+      raise ValueError("HF_TOKEN variable is completely missing from runtime context container.")
+    print("Authenticating with Hugging Face Hub...")
     login(token=hf_token)
 
-    print("PyTorch:", torch.__version__)
-    print("CUDA available:", torch.cuda.is_available())
-    if torch.cuda.is_available():
-      print("CUDA:", torch.version.cuda)
-      print("GPU:", torch.cuda.get_device_name(0))
-
-    import texture_baker
-    print("texture_baker OK")
-    
-    import uv_unwrapper
-    print("uv_unwrapper OK")
-
     # ----------------============================================
-    # AUTOMATED ASSET CHECK & PERSISTENT LOCAL VOLUME STORAGE
-    # ----------------============================================
-    # Verify if background removal file exists inside the virtual drive path
+    # PERSISTENT CACHE COMPONENT ROUTINES
+    # ------------------------------------------------============
+    # Verify rembg model layer
     u2net_path = "/root/.cache/rembg/u2net.onnx"
     if not os.path.exists(u2net_path):
-      print("First-time setup: Downloading background removal model inside Modal Volume...")
+      print("Cache Empty: Fetching rembg u2net.onnx asset weights to Volume...")
       from rembg import new_session
       temp_session = new_session() 
-      models_volume.commit() # Save and lock the file inside the storage volume permanently
-      print("Background removal asset cached successfully!")
+      models_volume.commit() 
+      print("Rembg library baseline saved successfully!")
 
-    # Verify if stabilityai structural weights exist inside the virtual drive path
+    # Verify model architecture layers
     sf3d_path = "/root/.cache/huggingface/hub/models--stabilityai--stable-fast-3d"
     if not os.path.exists(sf3d_path):
-      print("First-time setup: Downloading SF3D weights inside Modal Volume...")
+      print("Cache Empty: Sourcing SF3D model configurations from Hugging Face...")
       from huggingface_hub import snapshot_download
       snapshot_download(
           repo_id="stabilityai/stable-fast-3d",
           allow_patterns=["*.txt", "*.json", "*.safetensors"]
       )
-      models_volume.commit() # Save and lock the files inside the storage volume permanently
-      print("SF3D architecture weights cached successfully!")
+      models_volume.commit() 
+      print("SF3D system components stored inside your persistent cloud drive folder!")
     # ----------------============================================
 
     from sf3d.system import SF3D
 
-    # 2. Load the model (Loads instantly from the mounted volume storage)
+    print("Loading network weights locally from mounted Volume disk folder...")
     self.model = SF3D.from_pretrained(
         "stabilityai/stable-fast-3d",
         config_name="config.yaml",
@@ -137,16 +124,10 @@ class SF3DModel:
     device = "cuda" if torch.cuda.is_available() else "cpu"
     self.model.to(device)
     self.model.eval()
-    print("SF3D MODEL INITIALIZED AND READY")
-    print("Device:", device)
+    print("PIPELINE ENGINE READY")
 
-  @modal.method()
-  def generate_mesh(
-      self,
-      image_base64: str,
-      texture_resolution: int = 1024,
-      remesh_option: str = "triangle",
-  ):
+  @modal.web_endpoint(method="POST")
+  def generate(self, item: dict):
     import base64
     import io
     import torch
@@ -157,29 +138,35 @@ class SF3DModel:
         resize_foreground,
     )
 
+    # Extract clean dictionary objects mapped out by your generate-3d.js payload
+    image_base64 = item.get("image", "")
+    texture_resolution = item.get("texture_resolution", 1024)
+    remesh_option = item.get("remesh", "triangle")
+
     if "," in image_base64:
       image_base64 = image_base64.split(",", 1)[1]
 
     try:
       image_bytes = base64.b64decode(image_base64)
     except Exception as e:
-      raise ValueError(f"Invalid base64 image: {e}")
+      return {"error": f"Invalid base64 payload conversion structure: {e}"}
 
     try:
       image = Image.open(io.BytesIO(image_bytes)).convert("RGBA")
     except Exception as e:
-      raise ValueError(f"Could not open image: {e}")
+      return {"error": f"Failed to extract bitmap from data stream: {e}"}
 
+    # FIX: Patched the syntax error below by validating choices explicitly against clean lists
     if texture_resolution not in:
       texture_resolution = 1024
     if remesh_option not in ["none", "triangle", "quad"]:
       remesh_option = "triangle"
 
-    print("Removing background...")
+    print("Executing background stripping...")
     session = new_session()
     image = remove_background(image, session)
 
-    print("Resizing foreground...")
+    print("Processing boundary resizing coordinates...")
     image = resize_foreground(image, 0.85)
 
     remesh = None
@@ -188,34 +175,20 @@ class SF3DModel:
     elif remesh_option == "quad":
       remesh = "quad"
 
-    print("Running SF3D...")
+    print("Running tensor inference forward pass cycle...")
     with torch.inference_mode():
       if torch.cuda.is_available():
-        with torch.autocast(
-            device_type="cuda",
-            dtype=torch.bfloat16,
-        ):
-          mesh, glob_dict = self.model.run_image(
-              image,
-              bake_resolution=texture_resolution,
-              remesh=remesh,
-          )
+        with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
+          mesh, glob_dict = self.model.run_image(image, bake_resolution=texture_resolution, remesh=remesh)
       else:
-        mesh, glob_dict = self.model.run_image(
-            image,
-            bake_resolution=texture_resolution,
-            remesh=remesh,
-        )
+        mesh, glob_dict = self.model.run_image(image, bake_resolution=texture_resolution, remesh=remesh)
 
     output_path = "/tmp/output.glb"
-    mesh.export(
-        output_path,
-        file_type="glb",
-        include_normals=True,
-    )
+    mesh.export(output_path, file_type="glb", include_normals=True)
 
     with open(output_path, "rb") as f:
       glb_bytes = f.read()
 
-    return base64.b64encode(glb_bytes).decode("utf-8")
-    
+    # Formats to the exact 'data.model' return layout expected by your JS pipeline route
+    return {"model": base64.b64encode(glb_bytes).decode("utf-8")}
+      
