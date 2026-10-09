@@ -2,57 +2,12 @@ import os
 import modal
 
 # ============================================================
-# SF3D MODAL CONTAINER IMAGE CONFIGURATION (Force Cache Reset)
+# 🚀 FIX: PULL DIRECTLY FROM YOUR PRE-BUILT DOCKER HUB WORKER
 # ============================================================
-# Using micromamba forcefully clears old failing caches and handles torch wheel links natively
-image = (
-    modal.Image.micromamba(python_version="3.10")
-    .apt_install(
-        "git",
-        "build-essential",
-        "clang",
-        "ninja-build",
-        "cmake",
-        "wget",
-        "unzip",
-        "libgl1",
-        "libglib2.0-0",
-    )
-    # 🚀 Install torch using the index helper which works perfectly on micromamba images
-    .pip_install(
-        "torch==2.4.0",
-        "torchvision==0.19.0",
-        index_url="https://pytorch.org"
-    )
-    # Install the basic Python server requirements
-    .pip_install(
-        "setuptools==69.5.1",
-        "wheel",
-        "huggingface_hub",
-        "fastapi",
-        "uvicorn",
-        "python-multipart",
-        "rembg",
-        "accelerate"
-    )
-    .workdir("/app")
-    .run_commands("git clone https://github.com")
-    .workdir("/app/stable-fast-3d")
-    .run_commands(
-        "grep -v '^./texture_baker/' requirements.txt | grep -v '^./uv_unwrapper/' > /tmp/sf3d_requirements.txt",
-        "pip install -r /tmp/sf3d_requirements.txt",
-    )
-    .env(
-        {
-            "CUDA_HOME": "/usr/local/cuda",
-            "TORCH_CUDA_ARCH_LIST": "8.6",
-            "MAX_JOBS": "2",
-            "USE_CUDA": "1",
-            "USE_NATIVE_ARCH": "0",
-        }
-    )
-    .run_commands("pip install ./texture_baker/ --no-build-isolation")
-    .run_commands("pip install ./uv_unwrapper/ --no-build-isolation")
+# This completely bypasses the pip compilation errors on GitHub Actions!
+image = modal.Image.from_registry(
+    "rhydam12/sf3d-gpu-worker:latest",
+    add_python="3.10"
 )
 
 app = modal.App("sf3d-backend")
@@ -89,7 +44,7 @@ class SF3DModel:
 
     # ----------------============================================
     # PERSISTENT CACHE COMPONENT ROUTINES
-    # --------------------------------============================
+    # ------------------------------------------------============
     u2net_path = "/root/.cache/rembg/u2net.onnx"
     if not os.path.exists(u2net_path):
       print("Cache Empty: Fetching rembg u2net.onnx asset weights to Volume...")
@@ -110,6 +65,9 @@ class SF3DModel:
       print("SF3D system components stored inside your persistent cloud drive folder!")
     # --------------------------------============================
 
+    # Import directly from the pre-installed repository path in your worker image
+    import sys
+    sys.path.append("/app/stable-fast-3d")
     from sf3d.system import SF3D
 
     print("Loading network weights locally from mounted Volume disk folder...")
@@ -130,6 +88,9 @@ class SF3DModel:
     import torch
     from PIL import Image
     from rembg import new_session
+    
+    import sys
+    sys.path.append("/app/stable-fast-3d")
     from sf3d.utils import (
         remove_background,
         resize_foreground,
@@ -140,7 +101,7 @@ class SF3DModel:
     remesh_option = item.get("remesh", "triangle")
 
     if "," in image_base64:
-      image_base64 = image_base64.split(",", 1)
+      image_base64 = image_base64.split(",", 1)[1]
 
     try:
       image_bytes = base64.b64decode(image_base64)
@@ -152,7 +113,6 @@ class SF3DModel:
     except Exception as e:
       return {"error": f"Failed to extract bitmap from data stream: {e}"}
 
-    # Clean character condition mapping logic to bypass string filtration bugs
     if str(texture_resolution) == "512" or str(texture_resolution) == "1024" or str(texture_resolution) == "2048":
       pass
     else:
