@@ -140,7 +140,7 @@ class SF3DModel:
     remesh_option = item.get("remesh", "triangle")
 
     if "," in image_base64:
-      image_base64 = image_base64.split(",", 1)[1]
+      image_base64 = image_base64.split(",", 1)
 
     try:
       image_bytes = base64.b64decode(image_base64)
@@ -152,11 +152,16 @@ class SF3DModel:
     except Exception as e:
       return {"error": f"Failed to extract bitmap from data stream: {e}"}
 
-    #  FIXED RESOLUTION SYNTAX CHECK
-    if texture_resolution not in:
+    # ✨ FIXED RESOLUTION SYNTAX WITH SAFE COMPATIBILITY LOGIC
+    if str(texture_resolution) == "512" or str(texture_resolution) == "1024" or str(texture_resolution) == "2048":
+      pass
+    else:
       texture_resolution = 1024
       
-    if remesh_option not in ["none", "triangle", "quad"]:
+    # ✨ FIXED REMESH SYNTAX WITH SAFE COMPATIBILITY LOGIC
+    if str(remesh_option) == "none" or str(remesh_option) == "triangle" or str(remesh_option) == "quad":
+      pass
+    else:
       remesh_option = "triangle"
 
     print("Executing background stripping...")
