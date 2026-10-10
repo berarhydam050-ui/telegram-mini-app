@@ -27,7 +27,7 @@ REMESH_MODE = "none"
 app = modal.App(APP_NAME)
 models_volume = modal.Volume.from_name(VOLUME_NAME, create_if_missing=True)
 
-# Clean image definition with FastAPI bundled
+# Container image setup with FastAPI explicitly included
 image = (
     modal.Image.from_registry("rhydam12/sf3d-gpu-worker:latest", add_python="3.10")
     .pip_install("fastapi[standard]")
@@ -104,24 +104,24 @@ class SF3DModel:
 
     @modal.enter(snap=True)
     def freeze_to_cpu(self):
-        """STEP 1: Mocks missing comfy modules, patches network.py, and freezes model into RAM."""
+        """STEP 1: Safely mocks missing ComfyUI imports, patches network.py, and freezes model into CPU RAM."""
         import torch
         import sys
         
         print("--- STARTING CPU MEMORY SNAPSHOT ---")
         
-        # 1. Dynamically mock comfy and comfy.model_management to satisfy SF3D imports safely
+        # 1. Inject dynamic in-memory mocks for missing ComfyUI imports
         class MockModule(types.ModuleType):
             def __getattr__(self, name):
                 return MockModule(name)
             def __call__(self, *args, **kwargs):
                 return self
 
-        comfy_mock = MockModule("comfy")
-        sys.modules["comfy"] = comfy_mock
+        sys.modules["comfy"] = MockModule("comfy")
         sys.modules["comfy.model_management"] = MockModule("comfy.model_management")
+        sys.modules["folder_paths"] = MockModule("folder_paths")
 
-        # 2. Patch network.py on disk to fix torch.amp imports
+        # 2. Patch network.py directly inside the container
         path = "/app/stable_fast_3d/sf3d/models/network.py"
         if os.path.exists(path):
             with open(path, "r") as f:
@@ -133,18 +133,18 @@ class SF3DModel:
                 f.write(content)
             print("Successfully patched network.py container-side!")
 
-        # 3. Blind PyTorch to CUDA so SF3D loads safely into CPU RAM during build
+        # 3. Blind PyTorch to CUDA so SF3D loads into RAM during build
         self._orig_cuda_available = torch.cuda.is_available
         torch.cuda.is_available = lambda: False
         torch.set_default_device('cpu')
 
-        # 4. Import network safely
+        # 4. Import SF3D safely
         if "/app/stable_fast_3d" not in sys.path:
             sys.path.append("/app/stable_fast_3d")
             
         from stable_fast_3d.sf3d.system import SF3D
         
-        # 5. Load model structure into CPU memory layout
+        # 5. Load model weights into memory snapshot
         print("Loading SF3D pipeline state into frozen RAM snapshot...")
         self.pipeline = SF3D.from_pretrained(
             MODEL_ID,
@@ -157,16 +157,14 @@ class SF3DModel:
 
     @modal.enter(snap=False)
     def hydrate_to_gpu(self):
-        """STEP 2: Restores instantly from snapshot inside 10s and wakes up CUDA."""
+        """STEP 2: Restores instantly from snapshot and mounts weights to A10G VRAM."""
         import torch
         from rembg import new_session
         
         print("--- RESTORING SNAPSHOT / WAKING INSTANCE ---")
-        # Restore real CUDA operational metrics
         torch.cuda.is_available = self._orig_cuda_available
         torch.set_default_device("cuda")
         
-        # Shift weight layers from standard RAM snapshot onto actual container VRAM
         self.pipeline.to(GPU_DEVICE)
         remove_background_and_center._session = new_session("u2net")
         
@@ -176,7 +174,7 @@ class SF3DModel:
 
     @modal.method()
     def process_mesh(self, item: Any) -> dict:
-        """Runs mesh inference and guarantees safe multi-key payload arrays."""
+        """Runs SF3D inference and returns a base64 encoded GLB mesh."""
         import torch
         
         pil_img = decode_image(item)
@@ -222,7 +220,7 @@ class SF3DModel:
 @app.function(image=image, scaledown_window=15)
 @modal.asgi_app()
 def generate():
-    """Exposes the scale-to-zero model pool using a dynamic ASGI FastAPI wrapper."""
+    """Exposes the scale-to-zero backend pool via standard FastAPI ASGI routing."""
     from fastapi import FastAPI, HTTPException, Request
     from fastapi.middleware.cors import CORSMiddleware
 
