@@ -27,7 +27,7 @@ REMESH_MODE = "none"
 app = modal.App(APP_NAME)
 models_volume = modal.Volume.from_name(VOLUME_NAME, create_if_missing=True)
 
-# Build stage patch: Explicitly installs fastapi[standard] and patches network.py on disk
+# Build stage patch: Patches network.py on disk via Python before snapshot execution
 image = (
     modal.Image.from_registry("rhydam12/sf3d-gpu-worker:latest", add_python="3.10")
     .pip_install("fastapi[standard]")
@@ -208,17 +208,33 @@ class SF3DModel:
             torch.cuda.empty_cache()
 
 # ============================================================
-# 4. WEB ENDPOINT
+# 4. ASGI WEB APP ENDPOINT
 # ============================================================
 
-@app.function()
-@modal.fastapi_endpoint(method="POST")
-def generate(item: dict):
-    """Exposes the scale-to-zero model pool as an accessible Web API using fastapi_endpoint."""
-    try:
-        model_worker = SF3DModel()
-        return model_worker.process_mesh.remote(item)
-    except Exception as e:
-        traceback.print_exc()
-        return {"error": str(e), "traceback": traceback.format_exc()}
-    
+@app.function(image=image, scaledown_window=15)
+@modal.asgi_app()
+def generate():
+    """Exposes the scale-to-zero model pool using a dynamic ASGI FastAPI wrapper."""
+    from fastapi import FastAPI, HTTPException, Request
+    from fastapi.middleware.cors import CORSMiddleware
+
+    web_app = FastAPI()
+    web_app.add_middleware(
+        CORSMiddleware,
+        allow_origins=["*"],
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
+
+    @web_app.post("/")
+    @web_app.post("/generate")
+    async def run_generate(request: Request):
+        try:
+            data = await request.json()
+            model_worker = SF3DModel()
+            return await model_worker.process_mesh.remote.aio(data)
+        except Exception as e:
+            traceback.print_exc()
+            raise HTTPException(status_code=500, detail=str(e))
+
+    return web_app
