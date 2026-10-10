@@ -76,24 +76,18 @@ class SF3DModel:
         import torch.cuda.amp
         
         os.environ["HF_HOME"] = CACHE_DIR
-        
-        # Safe runtime compatibility patch for PyTorch amp decorators (prevents syntax/argument errors)
-        for module in [torch.cuda.amp, getattr(torch, "amp", None)]:
-            if module is not None:
-                for name in ["custom_fwd", "custom_bwd"]:
-                    if hasattr(module, name):
-                        orig = getattr(module, name)
-                        def make_safe(o):
-                            def safe_dec(*args, **kwargs):
-                                kwargs.pop("device_type", None)
-                                try:
-                                    return o(*args, **kwargs)
-                                except TypeError:
-                                    if args and callable(args[0]):
-                                        return o(args[0])
-                                    return lambda f: o(f)
-                            return safe_dec
-                        setattr(module, name, make_safe(orig))
+
+        # Runtime patch: Map torch.amp imports to torch.cuda.amp safely
+        try:
+            import torch.amp
+            torch.amp.custom_fwd = torch.cuda.amp.custom_fwd
+            torch.amp.custom_bwd = torch.cuda.amp.custom_bwd
+        except Exception:
+            amp_mod = types.ModuleType("amp")
+            amp_mod.custom_fwd = torch.cuda.amp.custom_fwd
+            amp_mod.custom_bwd = torch.cuda.amp.custom_bwd
+            torch.amp = amp_mod
+            sys.modules["torch.amp"] = amp_mod
 
         # Mock ComfyUI modules cleanly in-memory
         sys.modules["comfy"] = types.ModuleType("comfy")
@@ -168,4 +162,4 @@ def generate():
             raise HTTPException(status_code=500, detail=str(e))
 
     return web_app
-        
+    
