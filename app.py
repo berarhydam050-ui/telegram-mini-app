@@ -27,28 +27,10 @@ REMESH_MODE = "none"
 app = modal.App(APP_NAME)
 models_volume = modal.Volume.from_name(VOLUME_NAME, create_if_missing=True)
 
-# Build stage patch: Uses a clean heredoc Python script to patch network.py on disk safely
+# Clean image definition without error-prone build command wrappers
 image = (
     modal.Image.from_registry("rhydam12/sf3d-gpu-worker:latest", add_python="3.10")
     .pip_install("fastapi[standard]")
-    .run_commands(
-        "cat << 'EOF' > /tmp/patch.py\n"
-        "import os\n"
-        "path = '/app/stable_fast_3d/sf3d/models/network.py'\n"
-        "if os.path.exists(path):\n"
-        "    with open(path, 'r') as f:\n"
-        "        content = f.read()\n"
-        "    content = content.replace('from torch.amp', 'from torch.cuda.amp')\n"
-        "    content = content.replace('device_type=\"cuda\"', '')\n"
-        "    content = content.replace(\"device_type='cuda'\", '')\n"
-        "    with open(path, 'w') as f:\n"
-        "        f.write(content)\n"
-        "    print('Successfully patched network.py via Python script!')\n"
-        "else:\n"
-        "    print('Error: network.py not found at path.')\n"
-        "EOF\n"
-        "python /tmp/patch.py"
-    )
 )
 
 # ============================================================
@@ -122,24 +104,36 @@ class SF3DModel:
 
     @modal.enter(snap=True)
     def freeze_to_cpu(self):
-        """STEP 1: Runs during deployment. Freezes model into standard RAM."""
+        """STEP 1: Patches network.py and freezes model state into standard RAM."""
         import torch
         import sys
         
         print("--- STARTING CPU MEMORY SNAPSHOT ---")
         
-        # 1. Blind PyTorch to CUDA so SF3D loads safely into CPU RAM during build
+        # 1. Patch network.py directly container-side before importing SF3D
+        path = "/app/stable_fast_3d/sf3d/models/network.py"
+        if os.path.exists(path):
+            with open(path, "r") as f:
+                content = f.read()
+            content = content.replace("from torch.amp", "from torch.cuda.amp")
+            content = content.replace('device_type="cuda"', "")
+            content = content.replace("device_type='cuda'", "")
+            with open(path, "w") as f:
+                f.write(content)
+            print("Successfully patched network.py container-side!")
+
+        # 2. Blind PyTorch to CUDA so SF3D loads safely into CPU RAM during build
         self._orig_cuda_available = torch.cuda.is_available
         torch.cuda.is_available = lambda: False
         torch.set_default_device('cpu')
 
-        # 2. Import network safely since it has been patched on disk via build steps
+        # 3. Import network safely
         if "/app/stable_fast_3d" not in sys.path:
             sys.path.append("/app/stable_fast_3d")
             
         from stable_fast_3d.sf3d.system import SF3D
         
-        # 3. Load model structure into CPU memory layout
+        # 4. Load model structure into CPU memory layout
         print("Loading SF3D pipeline state into frozen RAM snapshot...")
         self.pipeline = SF3D.from_pretrained(
             MODEL_ID,
