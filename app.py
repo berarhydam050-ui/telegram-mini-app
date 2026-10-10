@@ -1,4 +1,3 @@
-
 import base64
 import functools
 import io
@@ -32,6 +31,11 @@ image = (
         add_python="3.10",
     )
     .pip_install("fastapi[standard]")
+)
+
+# API container only forwards JSON. It must not pull the CUDA image.
+web_image = modal.Image.debian_slim(python_version="3.11").pip_install(
+    "fastapi[standard]"
 )
 
 
@@ -97,19 +101,9 @@ def decode_image(data: Any):
         return ImageOps.exif_transpose(source).convert("RGBA")
 
 
-def remove_background_and_center(image):
+def remove_background_and_center(image, session):
     from PIL import Image
-    from rembg import new_session, remove
-
-    session = getattr(
-        remove_background_and_center,
-        "_session",
-        None,
-    )
-
-    if session is None:
-        session = new_session("u2net")
-        remove_background_and_center._session = session
+    from rembg import remove
 
     rgba = remove(image, session=session).convert("RGBA")
     bbox = rgba.getchannel("A").getbbox()
@@ -164,12 +158,12 @@ def remove_background_and_center(image):
     ],
     timeout=900,
     startup_timeout=900,
-
-    # Request shutdown after each GPU job.
+    # Handle one mesh, then destroy the container. No warm GPU.
     single_use_containers=True,
-    scaledown_window=0,
-
-    # Snapshot model initialization for faster cold starts.
+    min_containers=0,
+    # Modal rejects 0. Minimum is 2. single_use_containers is what
+    # shuts the GPU down after the job.
+    scaledown_window=2,
     enable_memory_snapshot=True,
     experimental_options={
         "enable_gpu_snapshot": True,
@@ -181,6 +175,7 @@ class SF3DModel:
     def load_model(self):
         import torch
         import types
+        from rembg import new_session
 
         os.environ["HF_HOME"] = CACHE_DIR
 
@@ -213,6 +208,10 @@ class SF3DModel:
         # Import only after applying the AMP compatibility patch.
         from stable_fast_3d.sf3d.system import SF3D
 
+        # Captured in the CPU snapshot so restores do not reload u2net.
+        print("[SF3D] Loading rembg session...")
+        self.rembg_session = new_session("u2net")
+
         print("[SF3D] Loading model on A10G...")
 
         self.pipeline = SF3D.from_pretrained(
@@ -223,8 +222,19 @@ class SF3DModel:
 
         self.pipeline.to("cuda:0")
         self.pipeline.eval()
+        torch.cuda.synchronize()
 
+        # Do not call run_image here. nvdiffrast graphics state
+        # breaks GPU snapshot capture.
         print("[SF3D] Model loaded; ready for snapshot.")
+
+    @modal.enter()
+    def wake(self):
+        # Runs after every snapshot restore, not during capture.
+        import torch
+
+        torch.cuda.synchronize()
+        print("[SF3D] Restored from snapshot.")
 
     @modal.method()
     def process_mesh(self, item: Any) -> dict:
@@ -240,7 +250,8 @@ class SF3DModel:
                 )
 
             img = remove_background_and_center(
-                decode_image(item)
+                decode_image(item),
+                self.rembg_session,
             )
 
             texture_res = (
@@ -316,8 +327,9 @@ class SF3DModel:
 # ============================================================
 
 @app.function(
-    image=image,
-    scaledown_window=0,
+    image=web_image,
+    scaledown_window=2,
+    min_containers=0,
     timeout=900,
     startup_timeout=900,
 )
