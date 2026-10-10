@@ -27,24 +27,27 @@ REMESH_MODE = "none"
 app = modal.App(APP_NAME)
 models_volume = modal.Volume.from_name(VOLUME_NAME, create_if_missing=True)
 
-# Build stage patch: Patches network.py on disk via Python before snapshot execution
+# Build stage patch: Uses a clean heredoc Python script to patch network.py on disk safely
 image = (
     modal.Image.from_registry("rhydam12/sf3d-gpu-worker:latest", add_python="3.10")
     .pip_install("fastapi[standard]")
     .run_commands(
-        "python -c \""
-        "path = '/app/stable_fast_3d/sf3d/models/network.py';"
-        "import os;"
-        "if os.path.exists(path):"
-        "    with open(path, 'r') as f: content = f.read();"
-        "    content = content.replace('from torch.amp', 'from torch.cuda.amp');"
-        "    content = content.replace('device_type=\\'cuda\\'', '');"
-        "    content = content.replace('device_type=\\\"cuda\\\"', '');"
-        "    with open(path, 'w') as f: f.write(content);"
-        "    print('Successfully patched network.py via Python!');"
-        "else:"
-        "    print('Error: network.py not found at path.');"
-        "\""
+        "cat << 'EOF' > /tmp/patch.py\n"
+        "import os\n"
+        "path = '/app/stable_fast_3d/sf3d/models/network.py'\n"
+        "if os.path.exists(path):\n"
+        "    with open(path, 'r') as f:\n"
+        "        content = f.read()\n"
+        "    content = content.replace('from torch.amp', 'from torch.cuda.amp')\n"
+        "    content = content.replace('device_type=\"cuda\"', '')\n"
+        "    content = content.replace(\"device_type='cuda'\", '')\n"
+        "    with open(path, 'w') as f:\n"
+        "        f.write(content)\n"
+        "    print('Successfully patched network.py via Python script!')\n"
+        "else:\n"
+        "    print('Error: network.py not found at path.')\n"
+        "EOF\n"
+        "python /tmp/patch.py"
     )
 )
 
@@ -238,3 +241,4 @@ def generate():
             raise HTTPException(status_code=500, detail=str(e))
 
     return web_app
+    
