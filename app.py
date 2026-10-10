@@ -111,22 +111,24 @@ class SF3DModel:
 
         print("--- STARTING CPU MEMORY SNAPSHOT ---")
         
-        # 1. Blind PyTorch to CUDA so SF3D doesn't crash trying to find a GPU during build
-        self._orig_cuda_available = torch.cuda.is_available
-        torch.cuda.is_available = lambda: False
-        torch.set_default_device('cpu')
-
-        # 2. Patch files BEFORE importing SF3D
+        # 1. Directly patch network.py on disk to fix torch.amp imports permanently
         network_path = "/app/stable-fast-3d/sf3d/models/network.py"
         if os.path.exists(network_path):
             with open(network_path, "r") as f:
                 code = f.read()
             code = code.replace("from torch.amp import custom_bwd, custom_fwd", "from torch.cuda.amp import custom_bwd, custom_fwd")
+            code = code.replace("from torch.amp import", "from torch.cuda.amp import")
             code = code.replace('device_type="cuda"', '')
             code = code.replace("device_type='cuda'", '')
             with open(network_path, "w") as f:
                 f.write(code)
 
+        # 2. Blind PyTorch to CUDA so SF3D loads safely into CPU RAM during build
+        self._orig_cuda_available = torch.cuda.is_available
+        torch.cuda.is_available = lambda: False
+        torch.set_default_device('cpu')
+
+        # 3. Safe Wrapper for texture_baker C++ ops
         baker_path = "/opt/conda/lib/python3.10/site-packages/texture_baker/baker.py"
         if os.path.exists(baker_path):
             with open(baker_path, "r") as f:
@@ -147,7 +149,7 @@ class SF3DModel:
         if hf_token:
             login(token=hf_token)
 
-        # 3. Import and load model safely into CPU RAM (Default device is set to CPU)
+        # 4. Import and load model safely into CPU RAM
         if "/app/stable-fast-3d" not in sys.path:
             sys.path.append("/app/stable-fast-3d")
         from sf3d.system import SF3D
@@ -169,34 +171,14 @@ class SF3DModel:
 
         print("--- COLD START DETECTED: THAWING TO GPU ---")
         
-        # 1. Restore PyTorch's ability to see the GPU
+        # 1. Restore PyTorch GPU visibility
         if hasattr(self, "_orig_cuda_available"):
             torch.cuda.is_available = self._orig_cuda_available
         
         torch.set_default_device("cuda")
         self.device = torch.device(GPU_DEVICE)
 
-        # 2. Apply Safe AMP Wrappers for PyTorch
-        _orig_custom_fwd = torch.cuda.amp.custom_fwd
-        _orig_custom_bwd = torch.cuda.amp.custom_bwd
-
-        def safe_custom_fwd(*args, **kwargs):
-            kwargs.pop("device_type", None)
-            return _orig_custom_fwd(*args, **kwargs)
-
-        def safe_custom_bwd(*args, **kwargs):
-            kwargs.pop("device_type", None)
-            return _orig_custom_bwd(*args, **kwargs)
-
-        if not hasattr(torch, "amp"):
-            torch.amp = types.ModuleType("amp")
-
-        torch.amp.custom_fwd = safe_custom_fwd
-        torch.amp.custom_bwd = safe_custom_bwd
-        torch.cuda.amp.custom_fwd = safe_custom_fwd
-        torch.cuda.amp.custom_bwd = safe_custom_bwd
-
-        # 3. Push Model to GPU VRAM and Init background remover
+        # 2. Push Model to GPU VRAM and Init background remover
         self.model.to(self.device)
         self.model.eval()
         remove_background_and_center._session = new_session("u2net")
@@ -210,11 +192,6 @@ class SF3DModel:
     def process_image(self, item: dict):
         import torch
         import torch.cuda.amp
-
-        if not hasattr(torch, "amp"):
-            torch.amp = types.ModuleType("amp")
-        torch.amp.custom_fwd = getattr(torch.cuda.amp, "custom_fwd", torch.amp.custom_fwd)
-        torch.amp.custom_bwd = getattr(torch.cuda.amp, "custom_bwd", torch.amp.custom_bwd)
 
         original = decode_image(item)
         processed = remove_background_and_center(original)
@@ -246,6 +223,7 @@ class SF3DModel:
                 "success": True,
                 "model": encoded,
                 "model_base64": encoded,
+                "glb": encoded,
                 "format": "glb",
             }
         finally:
@@ -281,3 +259,4 @@ def generate():
             raise HTTPException(status_code=500, detail=str(exc))
 
     return web_app
+            
