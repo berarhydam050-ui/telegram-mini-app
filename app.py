@@ -27,9 +27,10 @@ REMESH_MODE = "none"
 app = modal.App(APP_NAME)
 models_volume = modal.Volume.from_name(VOLUME_NAME, create_if_missing=True)
 
-# Build stage patch: Uses a robust Python script to patch network.py on disk BEFORE snapshot execution
+# Build stage patch: Explicitly installs fastapi[standard] and patches network.py on disk
 image = (
     modal.Image.from_registry("rhydam12/sf3d-gpu-worker:latest", add_python="3.10")
+    .pip_install("fastapi[standard]")
     .run_commands(
         "python -c \""
         "path = '/app/stable_fast_3d/sf3d/models/network.py';"
@@ -220,4 +221,4 @@ def generate(item: dict):
     except Exception as e:
         traceback.print_exc()
         return {"error": str(e), "traceback": traceback.format_exc()}
-        
+    
