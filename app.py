@@ -3,7 +3,6 @@ import io
 import os
 import sys
 import traceback
-import types
 from typing import Any
 import modal
 
@@ -66,18 +65,24 @@ def remove_background_and_center(image):
     gpu="A10G",
     volumes={CACHE_DIR: models_volume},
     scaledown_window=15,          
+    enable_memory_snapshot=True,  # Enables 5-second instant resume from RAM snapshot!
     secrets=[modal.Secret.from_name("huggingface-secret")],
     timeout=900,
 )
 class SF3DModel:
-    @modal.enter()
-    def load_model(self):
+    @modal.enter(snap=True)
+    def freeze_to_cpu(self):
         import torch
         
-        # Mock ComfyUI modules cleanly
-        sys.modules["comfy"] = types.ModuleType("comfy")
-        sys.modules["comfy.model_management"] = types.ModuleType("comfy.model_management")
-        sys.modules["folder_paths"] = types.ModuleType("folder_paths")
+        os.environ["HF_HOME"] = CACHE_DIR
+
+        # Create file-based module stubs so inspect/snapshot doesn't crash
+        os.makedirs("/app/comfy", exist_ok=True)
+        with open("/app/comfy/__init__.py", "w") as f: f.write("")
+        with open("/app/comfy/model_management.py", "w") as f: f.write("")
+        with open("/app/folder_paths.py", "w") as f: f.write("")
+        if "/app" not in sys.path:
+            sys.path.append("/app")
 
         # Patch network.py for PyTorch compatibility
         net_path = "/app/stable_fast_3d/sf3d/models/network.py"
@@ -90,25 +95,40 @@ class SF3DModel:
             with open(net_path, "w") as f:
                 f.write(content)
 
+        # Temporarily force CPU during snapshot build
+        self._orig_cuda_available = torch.cuda.is_available
+        torch.cuda.is_available = lambda: False
+        torch.set_default_device('cpu')
+
         if "/app/stable_fast_3d" not in sys.path:
             sys.path.append("/app/stable_fast_3d")
             
         from stable_fast_3d.sf3d.system import SF3D
-        print("Loading SF3D pipeline directly on A10G GPU...")
+        print("Freezing SF3D pipeline into memory snapshot...")
         self.pipeline = SF3D.from_pretrained(
             "stabilityai/stable-fast-3d",
             config_name="config.yaml",
-            weight_name="model.safetensors",
-            cache_dir=CACHE_DIR
+            weight_name="model.safetensors"
         )
-        self.pipeline.to("cuda:0")
         self.pipeline.eval()
-        print("SF3D pipeline successfully loaded on GPU!")
+
+    @modal.enter(snap=False)
+    def hydrate_to_gpu(self):
+        import torch
+        from rembg import new_session
+        
+        torch.cuda.is_available = self._orig_cuda_available
+        torch.set_default_device("cuda")
+        
+        self.pipeline.to("cuda:0")
+        remove_background_and_center._session = new_session("u2net")
+        torch.cuda.empty_cache()
 
     @modal.method()
     def process_mesh(self, item: Any) -> dict:
         import torch
         img = remove_background_and_center(decode_image(item))
+        
         texture_res = int(item.get("texture_resolution", 2048)) if isinstance(item, dict) else 2048
         remesh_val = item.get("remesh", "none") if isinstance(item, dict) else "none"
         if remesh_val == "none":
@@ -158,3 +178,4 @@ def generate():
             raise HTTPException(status_code=500, detail=str(e))
 
     return web_app
+        
