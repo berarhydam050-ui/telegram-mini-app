@@ -27,7 +27,7 @@ REMESH_MODE = "none"
 app = modal.App(APP_NAME)
 models_volume = modal.Volume.from_name(VOLUME_NAME, create_if_missing=True)
 
-# Clean image definition without error-prone build command wrappers
+# Clean image definition with FastAPI bundled
 image = (
     modal.Image.from_registry("rhydam12/sf3d-gpu-worker:latest", add_python="3.10")
     .pip_install("fastapi[standard]")
@@ -104,13 +104,24 @@ class SF3DModel:
 
     @modal.enter(snap=True)
     def freeze_to_cpu(self):
-        """STEP 1: Patches network.py and freezes model state into standard RAM."""
+        """STEP 1: Mocks missing comfy modules, patches network.py, and freezes model into RAM."""
         import torch
         import sys
         
         print("--- STARTING CPU MEMORY SNAPSHOT ---")
         
-        # 1. Patch network.py directly container-side before importing SF3D
+        # 1. Dynamically mock comfy and comfy.model_management to satisfy SF3D imports safely
+        class MockModule(types.ModuleType):
+            def __getattr__(self, name):
+                return MockModule(name)
+            def __call__(self, *args, **kwargs):
+                return self
+
+        comfy_mock = MockModule("comfy")
+        sys.modules["comfy"] = comfy_mock
+        sys.modules["comfy.model_management"] = MockModule("comfy.model_management")
+
+        # 2. Patch network.py on disk to fix torch.amp imports
         path = "/app/stable_fast_3d/sf3d/models/network.py"
         if os.path.exists(path):
             with open(path, "r") as f:
@@ -122,18 +133,18 @@ class SF3DModel:
                 f.write(content)
             print("Successfully patched network.py container-side!")
 
-        # 2. Blind PyTorch to CUDA so SF3D loads safely into CPU RAM during build
+        # 3. Blind PyTorch to CUDA so SF3D loads safely into CPU RAM during build
         self._orig_cuda_available = torch.cuda.is_available
         torch.cuda.is_available = lambda: False
         torch.set_default_device('cpu')
 
-        # 3. Import network safely
+        # 4. Import network safely
         if "/app/stable_fast_3d" not in sys.path:
             sys.path.append("/app/stable_fast_3d")
             
         from stable_fast_3d.sf3d.system import SF3D
         
-        # 4. Load model structure into CPU memory layout
+        # 5. Load model structure into CPU memory layout
         print("Loading SF3D pipeline state into frozen RAM snapshot...")
         self.pipeline = SF3D.from_pretrained(
             MODEL_ID,
