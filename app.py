@@ -3,6 +3,7 @@ import io
 import os
 import sys
 import traceback
+import types
 from typing import Any
 import modal
 
@@ -64,65 +65,54 @@ def remove_background_and_center(image):
     image=image,
     gpu="A10G",
     volumes={CACHE_DIR: models_volume},
-    scaledown_window=15,          
-    enable_memory_snapshot=True,  # Enables 5-second instant resume from RAM snapshot!
+    scaledown_window=300,
     secrets=[modal.Secret.from_name("huggingface-secret")],
     timeout=900,
 )
 class SF3DModel:
-    @modal.enter(snap=True)
-    def freeze_to_cpu(self):
+    @modal.enter()
+    def load_model(self):
         import torch
+        import torch.cuda.amp
         
         os.environ["HF_HOME"] = CACHE_DIR
+        
+        # Safe runtime compatibility patch for PyTorch amp decorators (prevents syntax/argument errors)
+        for module in [torch.cuda.amp, getattr(torch, "amp", None)]:
+            if module is not None:
+                for name in ["custom_fwd", "custom_bwd"]:
+                    if hasattr(module, name):
+                        orig = getattr(module, name)
+                        def make_safe(o):
+                            def safe_dec(*args, **kwargs):
+                                kwargs.pop("device_type", None)
+                                try:
+                                    return o(*args, **kwargs)
+                                except TypeError:
+                                    if args and callable(args[0]):
+                                        return o(args[0])
+                                    return lambda f: o(f)
+                            return safe_dec
+                        setattr(module, name, make_safe(orig))
 
-        # Create file-based module stubs so inspect/snapshot doesn't crash
-        os.makedirs("/app/comfy", exist_ok=True)
-        with open("/app/comfy/__init__.py", "w") as f: f.write("")
-        with open("/app/comfy/model_management.py", "w") as f: f.write("")
-        with open("/app/folder_paths.py", "w") as f: f.write("")
-        if "/app" not in sys.path:
-            sys.path.append("/app")
-
-        # Patch network.py for PyTorch compatibility
-        net_path = "/app/stable_fast_3d/sf3d/models/network.py"
-        if os.path.exists(net_path):
-            with open(net_path, "r") as f:
-                content = f.read()
-            content = content.replace("from torch.amp", "from torch.cuda.amp")
-            content = content.replace('device_type="cuda"', "")
-            content = content.replace("device_type='cuda'", "")
-            with open(net_path, "w") as f:
-                f.write(content)
-
-        # Temporarily force CPU during snapshot build
-        self._orig_cuda_available = torch.cuda.is_available
-        torch.cuda.is_available = lambda: False
-        torch.set_default_device('cpu')
+        # Mock ComfyUI modules cleanly in-memory
+        sys.modules["comfy"] = types.ModuleType("comfy")
+        sys.modules["comfy.model_management"] = types.ModuleType("comfy.model_management")
+        sys.modules["folder_paths"] = types.ModuleType("folder_paths")
 
         if "/app/stable_fast_3d" not in sys.path:
             sys.path.append("/app/stable_fast_3d")
             
         from stable_fast_3d.sf3d.system import SF3D
-        print("Freezing SF3D pipeline into memory snapshot...")
+        print("Loading SF3D pipeline directly on A10G GPU...")
         self.pipeline = SF3D.from_pretrained(
             "stabilityai/stable-fast-3d",
             config_name="config.yaml",
             weight_name="model.safetensors"
         )
-        self.pipeline.eval()
-
-    @modal.enter(snap=False)
-    def hydrate_to_gpu(self):
-        import torch
-        from rembg import new_session
-        
-        torch.cuda.is_available = self._orig_cuda_available
-        torch.set_default_device("cuda")
-        
         self.pipeline.to("cuda:0")
-        remove_background_and_center._session = new_session("u2net")
-        torch.cuda.empty_cache()
+        self.pipeline.eval()
+        print("SF3D pipeline successfully loaded on GPU!")
 
     @modal.method()
     def process_mesh(self, item: Any) -> dict:
@@ -154,7 +144,7 @@ class SF3DModel:
         finally:
             torch.cuda.empty_cache()
 
-@app.function(image=image, scaledown_window=15)
+@app.function(image=image, scaledown_window=300)
 @modal.asgi_app()
 def generate():
     from fastapi import FastAPI, HTTPException, Request
