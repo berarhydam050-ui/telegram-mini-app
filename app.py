@@ -18,8 +18,6 @@ VOLUME_NAME = "sf3d-models-volume"
 CACHE_DIR = "/root/.cache"
 SF3D_REPO = "/app/stable_fast_3d"
 
-# Official Stable Fast 3D default. The object fills this fraction
-# of a square frame; the rest is transparent padding.
 DEFAULT_FOREGROUND_RATIO = 0.85
 DEFAULT_TEXTURE_RESOLUTION = 2048
 MAX_INPUT_SIDE = 2048
@@ -32,10 +30,7 @@ models_volume = modal.Volume.from_name(
 )
 
 # ============================================================
-# IMAGE DEFINITION
-# Forces compilation of the custom CUDA extension (texture_baker)
-# with nvcc during image build so the CUDA kernel is available
-# after snapshot restore on A10G.
+# IMAGE DEFINITION (Dockerfile-safe)
 # ============================================================
 
 image = (
@@ -51,44 +46,32 @@ image = (
         "Pillow",
         "numpy",
         "trimesh",
-        "ninja",  # speeds up / stabilizes CUDA extension builds
+        "ninja",
     )
     .run_commands(
-        # Fail early if nvcc is missing
-        "which nvcc || (echo 'ERROR: nvcc not found in base image' && exit 1)",
+        # 1. Fail early if nvcc is missing
+        "which nvcc || (echo 'ERROR: nvcc not found' && exit 1)",
 
-        # Force rebuild of stable_fast_3d + its CUDA/C++ extensions
-        f"""
-        if [ -d {SF3D_REPO} ]; then
-            cd {SF3D_REPO}
-            echo "=== Building stable_fast_3d with CUDA support ==="
-            FORCE_CUDA=1 \\
-            TORCH_CUDA_ARCH_LIST="8.6" \\
-            pip install --no-build-isolation -e . -v
-        else
-            echo "ERROR: {SF3D_REPO} not found" && exit 1
-        fi
-        """,
+        # 2. Build the CUDA extension (single-line, safe for Dockerfile)
+        f"if [ -d {SF3D_REPO} ]; then "
+        f"cd {SF3D_REPO} && "
+        "echo '=== Building stable_fast_3d with CUDA support ===' && "
+        "FORCE_CUDA=1 TORCH_CUDA_ARCH_LIST='8.6' "
+        "pip install --no-build-isolation -e . -v ; "
+        "else echo 'ERROR: SF3D_REPO not found' && exit 1; fi",
 
-        # Sanity check that the CUDA operator actually exists
-        """
-        python -c "
-import torch
-print('PyTorch:', torch.__version__)
-print('CUDA available:', torch.cuda.is_available())
-try:
-    from texture_baker import texture_baker_cpp
-    print('texture_baker_cpp imported successfully')
-    print('Has rasterize:', hasattr(texture_baker_cpp, 'rasterize'))
-except Exception as e:
-    print('Failed to import texture_baker_cpp:', e)
-    raise
-"
-        """,
+        # 3. Sanity check that the CUDA operator exists
+        "python -c \""
+        "import torch; "
+        "print('PyTorch:', torch.__version__); "
+        "print('CUDA available:', torch.cuda.is_available()); "
+        "from texture_baker import texture_baker_cpp; "
+        "print('texture_baker_cpp imported'); "
+        "print('Has rasterize:', hasattr(texture_baker_cpp, 'rasterize'))"
+        "\"",
     )
 )
 
-# Lightweight image for the HTTP layer only
 web_image = modal.Image.debian_slim(python_version="3.11").pip_install(
     "fastapi[standard]"
 )
@@ -96,7 +79,6 @@ web_image = modal.Image.debian_slim(python_version="3.11").pip_install(
 
 # ============================================================
 # PYTORCH AMP COMPATIBILITY PATCH
-# Must run before importing SF3D.
 # ============================================================
 
 def patch_legacy_cuda_amp(torch):
@@ -119,8 +101,6 @@ def patch_legacy_cuda_amp(torch):
             original = make_wrapper(original)
             setattr(cuda_amp, name, original)
 
-        # PyTorch 2.3 only exposes these on torch.cuda.amp.
-        # This image's SF3D does: from torch.amp import custom_fwd, custom_bwd
         if getattr(torch_amp, name, None) is None:
             setattr(torch_amp, name, getattr(cuda_amp, name))
 
@@ -130,7 +110,6 @@ def patch_legacy_cuda_amp(torch):
 
 # ============================================================
 # IMAGE PREPROCESSING
-# Matches Stability-AI/stable-fast-3d sf3d/utils.py.
 # ============================================================
 
 def decode_image(data: Any):
@@ -176,7 +155,6 @@ def decode_image(data: Any):
 
 
 def remove_background(image, session, force=None):
-    """Official SF3D behavior: skip rembg when the image is already cut out."""
     from rembg import remove
 
     if force is False:
@@ -195,11 +173,6 @@ def remove_background(image, session, force=None):
 
 
 def resize_foreground(image, ratio: float):
-    """Center the object so it occupies `ratio` of a square transparent frame.
-
-    PIL crop pads with transparent pixels when the window extends outside
-    the source, which is what torchvision's crop does in the official repo.
-    """
     import numpy as np
     from PIL import Image
 
@@ -233,7 +206,6 @@ def resize_foreground(image, ratio: float):
 
     framed = image.crop((left, top, left + extent, top + extent))
 
-    # Keep the bake source sharp without handing SF3D a tiny or huge frame.
     longest = max(framed.width, framed.height)
     if longest > MAX_INPUT_SIDE:
         scale = MAX_INPUT_SIDE / longest
@@ -289,7 +261,6 @@ def prepare_input(item: Any, session):
     ],
     timeout=900,
     startup_timeout=900,
-    # One mesh, then the container is destroyed. No warm A10G.
     single_use_containers=True,
     min_containers=0,
     scaledown_window=2,
@@ -308,15 +279,9 @@ class SF3DModel:
 
         os.environ["HF_HOME"] = CACHE_DIR
 
-        # Patch AMP before importing any SF3D code.
         patch_legacy_cuda_amp(torch)
 
-        # Preserve compatibility with installations that import
-        # optional ComfyUI modules during SF3D initialization.
-        sys.modules.setdefault(
-            "comfy",
-            types.ModuleType("comfy"),
-        )
+        sys.modules.setdefault("comfy", types.ModuleType("comfy"))
         sys.modules.setdefault(
             "comfy.model_management",
             types.ModuleType("comfy.model_management"),
@@ -330,11 +295,9 @@ class SF3DModel:
             sys.path.insert(0, SF3D_REPO)
 
         if not torch.cuda.is_available():
-            raise RuntimeError(
-                "CUDA is unavailable on this Modal worker."
-            )
+            raise RuntimeError("CUDA is unavailable on this Modal worker.")
 
-        # Runtime check that the CUDA texture baker is present
+        # Runtime check for the CUDA texture baker
         try:
             from texture_baker import texture_baker_cpp
             if not hasattr(texture_baker_cpp, "rasterize"):
@@ -347,15 +310,12 @@ class SF3DModel:
                 f"texture_baker CUDA extension failed to load: {e}"
             ) from e
 
-        # Import only after applying the AMP compatibility patch.
         from stable_fast_3d.sf3d.system import SF3D
 
-        # Captured in the snapshot so later cold starts skip this load.
         print("[SF3D] Loading rembg session...")
         self.rembg_session = new_session("u2net")
 
         print("[SF3D] Loading model on A10G...")
-
         self.pipeline = SF3D.from_pretrained(
             "stabilityai/stable-fast-3d",
             config_name="config.yaml",
@@ -370,9 +330,7 @@ class SF3DModel:
 
     @modal.enter()
     def wake(self):
-        # Runs after every snapshot restore, not during capture.
         import torch
-
         torch.cuda.synchronize()
         print("[SF3D] Restored from snapshot.")
 
@@ -399,8 +357,7 @@ class SF3DModel:
 
             if texture_res not in (512, 1024, 2048, 4096):
                 raise ValueError(
-                    "texture_resolution must be 512, 1024, "
-                    "2048, or 4096."
+                    "texture_resolution must be 512, 1024, 2048, or 4096."
                 )
 
             remesh_val = (
@@ -410,9 +367,7 @@ class SF3DModel:
             )
 
             if remesh_val not in ("none", "triangle", "quad"):
-                raise ValueError(
-                    "remesh must be none, triangle, or quad."
-                )
+                raise ValueError("remesh must be none, triangle, or quad.")
 
             vertex_count = (
                 int(item.get("vertex_count", -1))
@@ -426,10 +381,7 @@ class SF3DModel:
 
             with (
                 torch.inference_mode(),
-                torch.autocast(
-                    device_type="cuda",
-                    dtype=torch.bfloat16,
-                ),
+                torch.autocast(device_type="cuda", dtype=torch.bfloat16),
             ):
                 mesh, _ = self.pipeline.run_image(
                     img,
@@ -442,21 +394,10 @@ class SF3DModel:
                 raise ValueError("No subject detected in the image.")
 
             output = io.BytesIO()
+            mesh.export(output, file_type="glb", include_normals=True)
+            encoded = base64.b64encode(output.getvalue()).decode("ascii")
 
-            mesh.export(
-                output,
-                file_type="glb",
-                include_normals=True,
-            )
-
-            encoded = base64.b64encode(
-                output.getvalue()
-            ).decode("ascii")
-
-            elapsed = round(
-                time.perf_counter() - started,
-                3,
-            )
+            elapsed = round(time.perf_counter() - started, 3)
 
             print(
                 f"[SF3D] Generation completed in {elapsed}s "
@@ -504,35 +445,21 @@ def generate():
 
     @web_app.get("/health")
     async def health():
-        return {
-            "status": "ok",
-            "service": APP_NAME,
-        }
+        return {"status": "ok", "service": APP_NAME}
 
     @web_app.post("/")
     @web_app.post("/generate")
     async def run_generate(request: Request):
         try:
             data = await request.json()
-
-            result = await SF3DModel().process_mesh.remote.aio(
-                data
-            )
-
+            result = await SF3DModel().process_mesh.remote.aio(data)
             return result
 
         except ValueError as exc:
-            raise HTTPException(
-                status_code=400,
-                detail=str(exc),
-            ) from exc
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
 
         except Exception as exc:
             traceback.print_exc()
-
-            raise HTTPException(
-                status_code=500,
-                detail=str(exc),
-            ) from exc
+            raise HTTPException(status_code=500, detail=str(exc)) from exc
 
     return web_app
