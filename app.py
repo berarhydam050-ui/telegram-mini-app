@@ -27,24 +27,61 @@ models_volume = modal.Volume.from_name(VOLUME_NAME, create_if_missing=True)
 
 # ============================================================
 # IMAGE DEFINITION
-# The base image does NOT contain nvcc, so we cannot recompile
-# CUDA extensions here. We rely on the base image having a
-# correctly built texture_baker and add a strong runtime check.
+# Builds from a real CUDA *devel* image so nvcc is available,
+# then compiles texture_baker with CUDA support for A10G.
 # ============================================================
 
 image = (
     modal.Image.from_registry(
-        "rhydam12/sf3d-gpu-worker:latest",
+        "nvidia/cuda:12.1.1-devel-ubuntu22.04",
         add_python="3.10",
     )
+    .apt_install(
+        "git",
+        "wget",
+        "curl",
+        "build-essential",
+        "ninja-build",
+        "libgl1",
+        "libglib2.0-0",
+    )
     .pip_install(
+        "torch==2.3.0",
+        "torchvision==0.18.0",
         "fastapi[standard]",
-        "torch",
-        "torchvision",
         "rembg",
         "Pillow",
         "numpy",
         "trimesh",
+        "einops",
+        "jaxtyping",
+        "omegaconf",
+        "transformers",
+        "open_clip_torch",
+        "huggingface-hub",
+        "ninja",
+        index_url="https://download.pytorch.org/whl/cu121",
+    )
+    .run_commands(
+        # Clone the official repository
+        f"git clone --depth 1 https://github.com/Stability-AI/stable-fast-3d.git {SF3D_REPO}",
+
+        # Force CUDA compilation of texture_baker for A10G (sm_86)
+        f"cd {SF3D_REPO} && "
+        "USE_CUDA=1 TORCH_CUDA_ARCH_LIST='8.6' FORCE_CUDA=1 "
+        "pip install --no-build-isolation -e ./texture_baker -v",
+
+        # Also install uv_unwrapper (optional but recommended)
+        f"cd {SF3D_REPO} && "
+        "USE_CUDA=1 TORCH_CUDA_ARCH_LIST='8.6' "
+        "pip install --no-build-isolation -e ./uv_unwrapper || true",
+
+        # Final verification that the CUDA operator exists
+        "python -c \""
+        "from texture_baker import texture_baker_cpp; "
+        "assert hasattr(texture_baker_cpp, 'rasterize'), 'CUDA rasterize missing'; "
+        "print('✅ texture_baker CUDA extension is ready')"
+        "\"",
     )
 )
 
@@ -56,7 +93,6 @@ web_image = (
 
 # ============================================================
 # PYTORCH AMP COMPATIBILITY PATCH
-# Must run before importing SF3D.
 # ============================================================
 
 def patch_legacy_cuda_amp(torch):
@@ -211,7 +247,7 @@ def prepare_input(item: Any, session):
 
 
 # ============================================================
-# GPU WORKER (single-use + memory snapshot)
+# GPU WORKER
 # ============================================================
 
 @app.cls(
@@ -238,7 +274,7 @@ class SF3DModel:
         os.environ["HF_HOME"] = CACHE_DIR
         patch_legacy_cuda_amp(torch)
 
-        # Stub optional ComfyUI modules that some SF3D installs try to import
+        # Stub optional ComfyUI modules
         for name in ("comfy", "comfy.model_management", "folder_paths"):
             sys.modules.setdefault(name, types.ModuleType(name))
 
@@ -248,24 +284,18 @@ class SF3DModel:
         if not torch.cuda.is_available():
             raise RuntimeError("CUDA is unavailable on this Modal worker.")
 
-        # ---------- Critical runtime check ----------
+        # Strong runtime check
         try:
             from texture_baker import texture_baker_cpp
             if not hasattr(texture_baker_cpp, "rasterize"):
                 raise RuntimeError("texture_baker_cpp.rasterize is missing")
-            print("[SF3D] texture_baker CUDA extension is available")
+            print("[SF3D] ✅ texture_baker CUDA extension is available")
         except Exception as e:
             raise RuntimeError(
-                "texture_baker CUDA extension failed to load.\n"
-                "The base image was built without CUDA support for texture_baker.\n"
-                "You must rebuild the base image (rhydam12/sf3d-gpu-worker) "
-                "using a CUDA *devel* image that contains nvcc, then run:\n"
-                "  FORCE_CUDA=1 TORCH_CUDA_ARCH_LIST=\"8.6\" pip install --no-build-isolation -e .\n"
-                f"Original error: {e}"
+                f"texture_baker CUDA extension failed to load: {e}"
             ) from e
-        # ---------------------------------------------
 
-        from stable_fast_3d.sf3d.system import SF3D
+        from sf3d.system import SF3D
 
         print("[SF3D] Loading rembg session...")
         self.rembg_session = new_session("u2net")
