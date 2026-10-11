@@ -27,8 +27,6 @@ models_volume = modal.Volume.from_name(VOLUME_NAME, create_if_missing=True)
 
 # ============================================================
 # IMAGE DEFINITION
-# Builds from a real CUDA *devel* image so nvcc is available,
-# then compiles texture_baker with CUDA support for A10G.
 # ============================================================
 
 image = (
@@ -45,9 +43,14 @@ image = (
         "libgl1",
         "libglib2.0-0",
     )
+    # 1. Install PyTorch from the official CUDA index
     .pip_install(
         "torch==2.3.0",
         "torchvision==0.18.0",
+        index_url="https://download.pytorch.org/whl/cu121",
+    )
+    # 2. Install the rest of the packages from normal PyPI
+    .pip_install(
         "fastapi[standard]",
         "rembg",
         "Pillow",
@@ -60,23 +63,22 @@ image = (
         "open_clip_torch",
         "huggingface-hub",
         "ninja",
-        index_url="https://download.pytorch.org/whl/cu121",
     )
     .run_commands(
-        # Clone the official repository
+        # Clone official repo
         f"git clone --depth 1 https://github.com/Stability-AI/stable-fast-3d.git {SF3D_REPO}",
 
-        # Force CUDA compilation of texture_baker for A10G (sm_86)
+        # Compile texture_baker with CUDA support for A10G (sm_86)
         f"cd {SF3D_REPO} && "
         "USE_CUDA=1 TORCH_CUDA_ARCH_LIST='8.6' FORCE_CUDA=1 "
         "pip install --no-build-isolation -e ./texture_baker -v",
 
-        # Also install uv_unwrapper (optional but recommended)
+        # Optional: uv_unwrapper
         f"cd {SF3D_REPO} && "
         "USE_CUDA=1 TORCH_CUDA_ARCH_LIST='8.6' "
         "pip install --no-build-isolation -e ./uv_unwrapper || true",
 
-        # Final verification that the CUDA operator exists
+        # Verification
         "python -c \""
         "from texture_baker import texture_baker_cpp; "
         "assert hasattr(texture_baker_cpp, 'rasterize'), 'CUDA rasterize missing'; "
@@ -274,7 +276,6 @@ class SF3DModel:
         os.environ["HF_HOME"] = CACHE_DIR
         patch_legacy_cuda_amp(torch)
 
-        # Stub optional ComfyUI modules
         for name in ("comfy", "comfy.model_management", "folder_paths"):
             sys.modules.setdefault(name, types.ModuleType(name))
 
@@ -284,16 +285,14 @@ class SF3DModel:
         if not torch.cuda.is_available():
             raise RuntimeError("CUDA is unavailable on this Modal worker.")
 
-        # Strong runtime check
+        # Runtime check
         try:
             from texture_baker import texture_baker_cpp
             if not hasattr(texture_baker_cpp, "rasterize"):
                 raise RuntimeError("texture_baker_cpp.rasterize is missing")
             print("[SF3D] ✅ texture_baker CUDA extension is available")
         except Exception as e:
-            raise RuntimeError(
-                f"texture_baker CUDA extension failed to load: {e}"
-            ) from e
+            raise RuntimeError(f"texture_baker CUDA extension failed to load: {e}") from e
 
         from sf3d.system import SF3D
 
