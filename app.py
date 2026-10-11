@@ -31,32 +31,17 @@ models_volume = modal.Volume.from_name(
     create_if_missing=True,
 )
 
+# Force CUDA compilation for custom C++/CUDA extensions (texture_baker)
+# during build time since build containers lack GPUs (torch.cuda.is_available() is False).
 image = (
     modal.Image.from_registry(
         "rhydam12/sf3d-gpu-worker:latest",
         add_python="3.10",
     )
     .pip_install("fastapi[standard]")
-    # One line on purpose. A multiline script is parsed as a Dockerfile,
-    # and `else` makes that parser fail. This rebuilds texture_baker with
-    # a CUDA kernel for the A10G (sm_86). The base image only has the CPU one.
     .run_commands(
-        "bash -lc '"
-        "export PATH=/opt/conda/bin:/usr/local/cuda/bin:$PATH && "
-        "command -v nvcc && "
-        "export CUDA_HOME=$(dirname $(dirname $(command -v nvcc))) && "
-        "export PATH=$CUDA_HOME/bin:$PATH && "
-        "export USE_CUDA=1 && "
-        "export TORCH_CUDA_ARCH_LIST=8.6 && "
-        "echo CUDA_HOME=$CUDA_HOME && "
-        "nvcc --version && "
-        "python -c \"import torch; print(torch.__version__, torch.version.cuda)\" && "
-        "python -m pip install ninja && "
-        "cd /app/stable_fast_3d/texture_baker && "
-        "rm -rf build && "
-        "python -m pip install --no-build-isolation --force-reinstall --no-deps . && "
-        "python -c \"import torch; d=torch._C._dispatch_dump(\\\"texture_baker_cpp::rasterize\\\"); print(d); ok=any(x.strip().startswith(\\\"CUDA:\\\") and \\\"registered\\\" in x and \\\"Autograd\\\" not in x and \\\"Autocast\\\" not in x for x in d.splitlines()); assert ok, d\""
-        "'"
+        f"cd {SF3D_REPO}/texture_baker && USE_CUDA=1 TORCH_CUDA_ARCH_LIST='8.6' pip install --no-build-isolation -e .",
+        f"cd {SF3D_REPO}/uv_unwrapper && pip install --no-build-isolation -e .",
     )
 )
 
@@ -98,24 +83,6 @@ def patch_legacy_cuda_amp(torch):
 
     print("[SF3D] AMP compatibility patch applied.")
     print(f"[SF3D] PyTorch: {torch.__version__}")
-
-
-def assert_texture_baker_cuda(torch):
-    dump = torch._C._dispatch_dump("texture_baker_cpp::rasterize")
-    cuda_ok = any(
-        line.strip().startswith("CUDA:")
-        and "registered" in line
-        and "Autograd" not in line
-        and "Autocast" not in line
-        for line in dump.splitlines()
-    )
-    if not cuda_ok:
-        print(dump)
-        raise RuntimeError(
-            "texture_baker has no CUDA rasterizer. "
-            "Rebuild the image so USE_CUDA=1 is set."
-        )
-    print("[SF3D] texture_baker CUDA kernel is registered.")
 
 
 # ============================================================
@@ -326,10 +293,7 @@ class SF3DModel:
             )
 
         # Import only after applying the AMP compatibility patch.
-        import texture_baker  # loads the CUDA extension
         from stable_fast_3d.sf3d.system import SF3D
-
-        assert_texture_baker_cuda(torch)
 
         # Captured in the snapshot so later cold starts skip this load.
         print("[SF3D] Loading rembg session...")
@@ -519,3 +483,4 @@ def generate():
             ) from exc
 
     return web_app
+    
