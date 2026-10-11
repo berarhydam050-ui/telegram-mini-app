@@ -51,24 +51,29 @@ web_image = modal.Image.debian_slim(python_version="3.11").pip_install(
 # ============================================================
 
 def patch_legacy_cuda_amp(torch):
-    amp = torch.cuda.amp
+    import torch.amp as torch_amp
+
+    cuda_amp = torch.cuda.amp
+
+    def make_wrapper(original_decorator):
+        @functools.wraps(original_decorator)
+        def wrapper(*args, **kwargs):
+            kwargs.pop("device_type", None)
+            return original_decorator(*args, **kwargs)
+
+        wrapper._sf3d_compat_patched = True
+        return wrapper
 
     for name in ("custom_fwd", "custom_bwd"):
-        original = getattr(amp, name)
+        original = getattr(cuda_amp, name)
+        if not getattr(original, "_sf3d_compat_patched", False):
+            original = make_wrapper(original)
+            setattr(cuda_amp, name, original)
 
-        if getattr(original, "_sf3d_compat_patched", False):
-            continue
-
-        def make_wrapper(original_decorator):
-            @functools.wraps(original_decorator)
-            def wrapper(*args, **kwargs):
-                kwargs.pop("device_type", None)
-                return original_decorator(*args, **kwargs)
-
-            wrapper._sf3d_compat_patched = True
-            return wrapper
-
-        setattr(amp, name, make_wrapper(original))
+        # PyTorch 2.3 only exposes these on torch.cuda.amp.
+        # This image's SF3D does: from torch.amp import custom_fwd, custom_bwd
+        if getattr(torch_amp, name, None) is None:
+            setattr(torch_amp, name, getattr(cuda_amp, name))
 
     print("[SF3D] AMP compatibility patch applied.")
     print(f"[SF3D] PyTorch: {torch.__version__}")
