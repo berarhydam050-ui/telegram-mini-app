@@ -8,7 +8,6 @@ from typing import Any
 
 import modal
 
-
 # ============================================================
 # CONFIGURATION
 # ============================================================
@@ -24,15 +23,13 @@ MAX_INPUT_SIDE = 2048
 
 app = modal.App(APP_NAME)
 
-models_volume = modal.Volume.from_name(
-    VOLUME_NAME,
-    create_if_missing=True,
-)
+models_volume = modal.Volume.from_name(VOLUME_NAME, create_if_missing=True)
 
 # ============================================================
 # IMAGE DEFINITION
-# We no longer try to recompile CUDA extensions because the
-# base image does not contain nvcc.
+# The base image does NOT contain nvcc, so we cannot recompile
+# CUDA extensions here. We rely on the base image having a
+# correctly built texture_baker and add a strong runtime check.
 # ============================================================
 
 image = (
@@ -51,13 +48,15 @@ image = (
     )
 )
 
-web_image = modal.Image.debian_slim(python_version="3.11").pip_install(
-    "fastapi[standard]"
+web_image = (
+    modal.Image.debian_slim(python_version="3.11")
+    .pip_install("fastapi[standard]")
 )
 
 
 # ============================================================
 # PYTORCH AMP COMPATIBILITY PATCH
+# Must run before importing SF3D.
 # ============================================================
 
 def patch_legacy_cuda_amp(torch):
@@ -77,14 +76,12 @@ def patch_legacy_cuda_amp(torch):
     for name in ("custom_fwd", "custom_bwd"):
         original = getattr(cuda_amp, name)
         if not getattr(original, "_sf3d_compat_patched", False):
-            original = make_wrapper(original)
-            setattr(cuda_amp, name, original)
+            setattr(cuda_amp, name, make_wrapper(original))
 
         if getattr(torch_amp, name, None) is None:
             setattr(torch_amp, name, getattr(cuda_amp, name))
 
-    print("[SF3D] AMP compatibility patch applied.")
-    print(f"[SF3D] PyTorch: {torch.__version__}")
+    print(f"[SF3D] AMP compatibility patch applied (PyTorch {torch.__version__})")
 
 
 # ============================================================
@@ -106,12 +103,10 @@ def decode_image(data: Any):
         raise ValueError("No valid base64 image payload provided.")
 
     data = data.strip()
-
     if data.startswith("data:") and "," in data[:200]:
         data = data.split(",", 1)[1]
 
     raw = base64.b64decode(data, validate=False)
-
     if not raw:
         raise ValueError("Decoded image buffer is empty.")
 
@@ -123,13 +118,9 @@ def decode_image(data: Any):
     if longest > MAX_INPUT_SIDE:
         scale = MAX_INPUT_SIDE / longest
         image = image.resize(
-            (
-                max(1, int(image.width * scale)),
-                max(1, int(image.height * scale)),
-            ),
+            (max(1, int(image.width * scale)), max(1, int(image.height * scale))),
             Image.Resampling.LANCZOS,
         )
-
     return image
 
 
@@ -147,7 +138,6 @@ def remove_background(image, session, force=None):
 
     if do_remove:
         image = remove(image, session=session).convert("RGBA")
-
     return image
 
 
@@ -189,22 +179,15 @@ def resize_foreground(image, ratio: float):
     if longest > MAX_INPUT_SIDE:
         scale = MAX_INPUT_SIDE / longest
         framed = framed.resize(
-            (
-                max(1, int(framed.width * scale)),
-                max(1, int(framed.height * scale)),
-            ),
+            (max(1, int(framed.width * scale)), max(1, int(framed.height * scale))),
             Image.Resampling.LANCZOS,
         )
     elif longest < 512:
         scale = 512 / longest
         framed = framed.resize(
-            (
-                max(1, int(framed.width * scale)),
-                max(1, int(framed.height * scale)),
-            ),
+            (max(1, int(framed.width * scale)), max(1, int(framed.height * scale))),
             Image.Resampling.LANCZOS,
         )
-
     return framed
 
 
@@ -228,25 +211,21 @@ def prepare_input(item: Any, session):
 
 
 # ============================================================
-# SINGLE-USE GPU WORKER WITH MEMORY SNAPSHOTS
+# GPU WORKER (single-use + memory snapshot)
 # ============================================================
 
 @app.cls(
     image=image,
     gpu="A10G",
     volumes={CACHE_DIR: models_volume},
-    secrets=[
-        modal.Secret.from_name("huggingface-secret"),
-    ],
+    secrets=[modal.Secret.from_name("huggingface-secret")],
     timeout=900,
     startup_timeout=900,
     single_use_containers=True,
     min_containers=0,
     scaledown_window=2,
     enable_memory_snapshot=True,
-    experimental_options={
-        "enable_gpu_snapshot": True,
-    },
+    experimental_options={"enable_gpu_snapshot": True},
 )
 class SF3DModel:
 
@@ -257,18 +236,11 @@ class SF3DModel:
         from rembg import new_session
 
         os.environ["HF_HOME"] = CACHE_DIR
-
         patch_legacy_cuda_amp(torch)
 
-        sys.modules.setdefault("comfy", types.ModuleType("comfy"))
-        sys.modules.setdefault(
-            "comfy.model_management",
-            types.ModuleType("comfy.model_management"),
-        )
-        sys.modules.setdefault(
-            "folder_paths",
-            types.ModuleType("folder_paths"),
-        )
+        # Stub optional ComfyUI modules that some SF3D installs try to import
+        for name in ("comfy", "comfy.model_management", "folder_paths"):
+            sys.modules.setdefault(name, types.ModuleType(name))
 
         if SF3D_REPO not in sys.path:
             sys.path.insert(0, SF3D_REPO)
@@ -276,20 +248,22 @@ class SF3DModel:
         if not torch.cuda.is_available():
             raise RuntimeError("CUDA is unavailable on this Modal worker.")
 
-        # Strong runtime check – this will catch the original problem early
+        # ---------- Critical runtime check ----------
         try:
             from texture_baker import texture_baker_cpp
             if not hasattr(texture_baker_cpp, "rasterize"):
-                raise RuntimeError(
-                    "texture_baker_cpp.rasterize not found – CUDA extension missing"
-                )
-            print("[SF3D] texture_baker CUDA extension OK")
+                raise RuntimeError("texture_baker_cpp.rasterize is missing")
+            print("[SF3D] texture_baker CUDA extension is available")
         except Exception as e:
             raise RuntimeError(
-                f"texture_baker CUDA extension failed to load: {e}\n"
-                "Your base image was built without CUDA support for texture_baker. "
-                "You need to rebuild the base image with FORCE_CUDA=1 and nvcc available."
+                "texture_baker CUDA extension failed to load.\n"
+                "The base image was built without CUDA support for texture_baker.\n"
+                "You must rebuild the base image (rhydam12/sf3d-gpu-worker) "
+                "using a CUDA *devel* image that contains nvcc, then run:\n"
+                "  FORCE_CUDA=1 TORCH_CUDA_ARCH_LIST=\"8.6\" pip install --no-build-isolation -e .\n"
+                f"Original error: {e}"
             ) from e
+        # ---------------------------------------------
 
         from stable_fast_3d.sf3d.system import SF3D
 
@@ -302,11 +276,9 @@ class SF3DModel:
             config_name="config.yaml",
             weight_name="model.safetensors",
         )
-
         self.pipeline.to("cuda:0")
         self.pipeline.eval()
         torch.cuda.synchronize()
-
         print("[SF3D] Model loaded; ready for snapshot.")
 
     @modal.enter()
@@ -324,9 +296,7 @@ class SF3DModel:
 
         try:
             if not isinstance(item, (dict, str)):
-                raise ValueError(
-                    "Request must be an object or base64 image string."
-                )
+                raise ValueError("Request must be an object or base64 image string.")
 
             img, ratio = prepare_input(item, self.rembg_session)
 
@@ -335,35 +305,20 @@ class SF3DModel:
                 if isinstance(item, dict)
                 else DEFAULT_TEXTURE_RESOLUTION
             )
-
             if texture_res not in (512, 1024, 2048, 4096):
-                raise ValueError(
-                    "texture_resolution must be 512, 1024, 2048, or 4096."
-                )
+                raise ValueError("texture_resolution must be 512, 1024, 2048, or 4096.")
 
-            remesh_val = (
-                item.get("remesh", "none")
-                if isinstance(item, dict)
-                else "none"
-            )
-
+            remesh_val = item.get("remesh", "none") if isinstance(item, dict) else "none"
             if remesh_val not in ("none", "triangle", "quad"):
                 raise ValueError("remesh must be none, triangle, or quad.")
 
             vertex_count = (
-                int(item.get("vertex_count", -1))
-                if isinstance(item, dict)
-                else -1
+                int(item.get("vertex_count", -1)) if isinstance(item, dict) else -1
             )
             if vertex_count == 0 or vertex_count < -1:
-                raise ValueError(
-                    "vertex_count must be -1 or a positive integer."
-                )
+                raise ValueError("vertex_count must be -1 or a positive integer.")
 
-            with (
-                torch.inference_mode(),
-                torch.autocast(device_type="cuda", dtype=torch.bfloat16),
-            ):
+            with torch.inference_mode(), torch.autocast(device_type="cuda", dtype=torch.bfloat16):
                 mesh, _ = self.pipeline.run_image(
                     img,
                     bake_resolution=texture_res,
@@ -379,11 +334,7 @@ class SF3DModel:
             encoded = base64.b64encode(output.getvalue()).decode("ascii")
 
             elapsed = round(time.perf_counter() - started, 3)
-
-            print(
-                f"[SF3D] Generation completed in {elapsed}s "
-                f"(texture={texture_res}, ratio={ratio})"
-            )
+            print(f"[SF3D] Generation completed in {elapsed}s (texture={texture_res}, ratio={ratio})")
 
             return {
                 "success": True,
@@ -416,7 +367,6 @@ def generate():
     from fastapi.middleware.cors import CORSMiddleware
 
     web_app = FastAPI()
-
     web_app.add_middleware(
         CORSMiddleware,
         allow_origins=["*"],
@@ -433,12 +383,9 @@ def generate():
     async def run_generate(request: Request):
         try:
             data = await request.json()
-            result = await SF3DModel().process_mesh.remote.aio(data)
-            return result
-
+            return await SF3DModel().process_mesh.remote.aio(data)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
-
         except Exception as exc:
             traceback.print_exc()
             raise HTTPException(status_code=500, detail=str(exc)) from exc
