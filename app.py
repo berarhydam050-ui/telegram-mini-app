@@ -31,21 +31,64 @@ models_volume = modal.Volume.from_name(
     create_if_missing=True,
 )
 
-# Force CUDA compilation for custom C++/CUDA extensions (texture_baker)
-# during build time since build containers lack GPUs (torch.cuda.is_available() is False).
+# ============================================================
+# IMAGE DEFINITION
+# Forces compilation of the custom CUDA extension (texture_baker)
+# with nvcc during image build so the CUDA kernel is available
+# after snapshot restore on A10G.
+# ============================================================
+
 image = (
     modal.Image.from_registry(
         "rhydam12/sf3d-gpu-worker:latest",
         add_python="3.10",
     )
-    .pip_install("fastapi[standard]")
+    .pip_install(
+        "fastapi[standard]",
+        "torch",
+        "torchvision",
+        "rembg",
+        "Pillow",
+        "numpy",
+        "trimesh",
+        "ninja",  # speeds up / stabilizes CUDA extension builds
+    )
     .run_commands(
-        f"cd {SF3D_REPO}/texture_baker && USE_CUDA=1 TORCH_CUDA_ARCH_LIST='8.6' pip install --no-build-isolation -e .",
-        f"cd {SF3D_REPO}/uv_unwrapper && pip install --no-build-isolation -e .",
+        # Fail early if nvcc is missing
+        "which nvcc || (echo 'ERROR: nvcc not found in base image' && exit 1)",
+
+        # Force rebuild of stable_fast_3d + its CUDA/C++ extensions
+        f"""
+        if [ -d {SF3D_REPO} ]; then
+            cd {SF3D_REPO}
+            echo "=== Building stable_fast_3d with CUDA support ==="
+            FORCE_CUDA=1 \\
+            TORCH_CUDA_ARCH_LIST="8.6" \\
+            pip install --no-build-isolation -e . -v
+        else
+            echo "ERROR: {SF3D_REPO} not found" && exit 1
+        fi
+        """,
+
+        # Sanity check that the CUDA operator actually exists
+        """
+        python -c "
+import torch
+print('PyTorch:', torch.__version__)
+print('CUDA available:', torch.cuda.is_available())
+try:
+    from texture_baker import texture_baker_cpp
+    print('texture_baker_cpp imported successfully')
+    print('Has rasterize:', hasattr(texture_baker_cpp, 'rasterize'))
+except Exception as e:
+    print('Failed to import texture_baker_cpp:', e)
+    raise
+"
+        """,
     )
 )
 
-# The HTTP app only forwards JSON. Do not boot it on the CUDA image.
+# Lightweight image for the HTTP layer only
 web_image = modal.Image.debian_slim(python_version="3.11").pip_install(
     "fastapi[standard]"
 )
@@ -249,7 +292,6 @@ def prepare_input(item: Any, session):
     # One mesh, then the container is destroyed. No warm A10G.
     single_use_containers=True,
     min_containers=0,
-    # Modal rejects 0. Minimum is 2. single_use_containers stops the GPU.
     scaledown_window=2,
     enable_memory_snapshot=True,
     experimental_options={
@@ -292,6 +334,19 @@ class SF3DModel:
                 "CUDA is unavailable on this Modal worker."
             )
 
+        # Runtime check that the CUDA texture baker is present
+        try:
+            from texture_baker import texture_baker_cpp
+            if not hasattr(texture_baker_cpp, "rasterize"):
+                raise RuntimeError(
+                    "texture_baker_cpp.rasterize not found – CUDA extension missing"
+                )
+            print("[SF3D] texture_baker CUDA extension OK")
+        except Exception as e:
+            raise RuntimeError(
+                f"texture_baker CUDA extension failed to load: {e}"
+            ) from e
+
         # Import only after applying the AMP compatibility patch.
         from stable_fast_3d.sf3d.system import SF3D
 
@@ -311,8 +366,6 @@ class SF3DModel:
         self.pipeline.eval()
         torch.cuda.synchronize()
 
-        # Do not call run_image here. nvdiffrast graphics state
-        # breaks GPU snapshot capture.
         print("[SF3D] Model loaded; ready for snapshot.")
 
     @modal.enter()
@@ -483,4 +536,3 @@ def generate():
             ) from exc
 
     return web_app
-    
