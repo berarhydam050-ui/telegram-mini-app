@@ -18,6 +18,12 @@ VOLUME_NAME = "sf3d-models-volume"
 CACHE_DIR = "/root/.cache"
 SF3D_REPO = "/app/stable_fast_3d"
 
+# Official Stable Fast 3D default. The object fills this fraction
+# of a square frame; the rest is transparent padding.
+DEFAULT_FOREGROUND_RATIO = 0.85
+DEFAULT_TEXTURE_RESOLUTION = 2048
+MAX_INPUT_SIDE = 2048
+
 app = modal.App(APP_NAME)
 
 models_volume = modal.Volume.from_name(
@@ -33,7 +39,7 @@ image = (
     .pip_install("fastapi[standard]")
 )
 
-# API container only forwards JSON. It must not pull the CUDA image.
+# The HTTP app only forwards JSON. Do not boot it on the CUDA image.
 web_image = modal.Image.debian_slim(python_version="3.11").pip_install(
     "fastapi[standard]"
 )
@@ -70,6 +76,7 @@ def patch_legacy_cuda_amp(torch):
 
 # ============================================================
 # IMAGE PREPROCESSING
+# Matches Stability-AI/stable-fast-3d sf3d/utils.py.
 # ============================================================
 
 def decode_image(data: Any):
@@ -98,51 +105,121 @@ def decode_image(data: Any):
 
     with Image.open(io.BytesIO(raw)) as source:
         source.load()
-        return ImageOps.exif_transpose(source).convert("RGBA")
+        image = ImageOps.exif_transpose(source).convert("RGBA")
+
+    longest = max(image.width, image.height)
+    if longest > MAX_INPUT_SIDE:
+        scale = MAX_INPUT_SIDE / longest
+        image = image.resize(
+            (
+                max(1, int(image.width * scale)),
+                max(1, int(image.height * scale)),
+            ),
+            Image.Resampling.LANCZOS,
+        )
+
+    return image
 
 
-def remove_background_and_center(image, session):
-    from PIL import Image
+def remove_background(image, session, force=None):
+    """Official SF3D behavior: skip rembg when the image is already cut out."""
     from rembg import remove
 
-    rgba = remove(image, session=session).convert("RGBA")
-    bbox = rgba.getchannel("A").getbbox()
+    if force is False:
+        return image
 
-    if bbox is None:
+    do_remove = True
+    if image.mode == "RGBA" and image.getextrema()[3][0] < 255:
+        do_remove = False
+    if force is True:
+        do_remove = True
+
+    if do_remove:
+        image = remove(image, session=session).convert("RGBA")
+
+    return image
+
+
+def resize_foreground(image, ratio: float):
+    """Center the object so it occupies `ratio` of a square transparent frame.
+
+    PIL crop pads with transparent pixels when the window extends outside
+    the source, which is what torchvision's crop does in the official repo.
+    """
+    import numpy as np
+    from PIL import Image
+
+    if image.mode != "RGBA":
+        image = image.convert("RGBA")
+
+    mask = np.array(image)[:, :, -1]
+    foreground = mask > 0.5
+    if not foreground.any():
         raise ValueError("No foreground object detected.")
 
-    foreground = rgba.crop(bbox)
+    rows = foreground.any(axis=1)
+    cols = foreground.any(axis=0)
+    y1 = int(rows.argmax())
+    y2 = int(len(rows) - 1 - rows[::-1].argmax())
+    x1 = int(cols.argmax())
+    x2 = int(len(cols) - 1 - cols[::-1].argmax())
 
-    # Scale the foreground to leave a little margin.
-    longest_side = max(foreground.width, foreground.height)
-    target_side = max(1, int(longest_side * 0.85))
-    scale = target_side / longest_side
+    height = y2 - y1
+    width = x2 - x1
+    if height <= 0 or width <= 0:
+        raise ValueError("No foreground object detected.")
 
-    new_size = (
-        max(1, int(foreground.width * scale)),
-        max(1, int(foreground.height * scale)),
-    )
+    y_center = (y1 + y2) / 2
+    x_center = (x1 + x2) / 2
+    side = max(height, width) / ratio
 
-    foreground = foreground.resize(
-        new_size,
-        Image.Resampling.LANCZOS,
-    )
+    top = int(y_center - side / 2)
+    left = int(x_center - side / 2)
+    extent = int(side)
 
-    canvas_side = max(new_size)
+    framed = image.crop((left, top, left + extent, top + extent))
 
-    canvas = Image.new(
-        "RGBA",
-        (canvas_side, canvas_side),
-        (0, 0, 0, 0),
-    )
+    # Keep the bake source sharp without handing SF3D a tiny or huge frame.
+    longest = max(framed.width, framed.height)
+    if longest > MAX_INPUT_SIDE:
+        scale = MAX_INPUT_SIDE / longest
+        framed = framed.resize(
+            (
+                max(1, int(framed.width * scale)),
+                max(1, int(framed.height * scale)),
+            ),
+            Image.Resampling.LANCZOS,
+        )
+    elif longest < 512:
+        scale = 512 / longest
+        framed = framed.resize(
+            (
+                max(1, int(framed.width * scale)),
+                max(1, int(framed.height * scale)),
+            ),
+            Image.Resampling.LANCZOS,
+        )
 
-    position = (
-        (canvas_side - foreground.width) // 2,
-        (canvas_side - foreground.height) // 2,
-    )
+    return framed
 
-    canvas.alpha_composite(foreground, dest=position)
-    return canvas
+
+def prepare_input(item: Any, session):
+    image = decode_image(item)
+
+    if isinstance(item, dict) and "foreground_ratio" in item:
+        ratio = float(item["foreground_ratio"])
+        if not 0.5 <= ratio <= 0.95:
+            raise ValueError("foreground_ratio must be between 0.5 and 0.95.")
+    else:
+        ratio = DEFAULT_FOREGROUND_RATIO
+
+    force = item.get("remove_background") if isinstance(item, dict) else None
+    if force is not None and not isinstance(force, bool):
+        raise ValueError("remove_background must be true or false.")
+
+    image = remove_background(image, session, force=force)
+    image = resize_foreground(image, ratio)
+    return image, ratio
 
 
 # ============================================================
@@ -158,11 +235,10 @@ def remove_background_and_center(image, session):
     ],
     timeout=900,
     startup_timeout=900,
-    # Handle one mesh, then destroy the container. No warm GPU.
+    # One mesh, then the container is destroyed. No warm A10G.
     single_use_containers=True,
     min_containers=0,
-    # Modal rejects 0. Minimum is 2. single_use_containers is what
-    # shuts the GPU down after the job.
+    # Modal rejects 0. Minimum is 2. single_use_containers stops the GPU.
     scaledown_window=2,
     enable_memory_snapshot=True,
     experimental_options={
@@ -208,7 +284,7 @@ class SF3DModel:
         # Import only after applying the AMP compatibility patch.
         from stable_fast_3d.sf3d.system import SF3D
 
-        # Captured in the CPU snapshot so restores do not reload u2net.
+        # Captured in the snapshot so later cold starts skip this load.
         print("[SF3D] Loading rembg session...")
         self.rembg_session = new_session("u2net")
 
@@ -249,18 +325,14 @@ class SF3DModel:
                     "Request must be an object or base64 image string."
                 )
 
-            img = remove_background_and_center(
-                decode_image(item),
-                self.rembg_session,
-            )
+            img, ratio = prepare_input(item, self.rembg_session)
 
             texture_res = (
-                int(item.get("texture_resolution", 2048))
+                int(item.get("texture_resolution", DEFAULT_TEXTURE_RESOLUTION))
                 if isinstance(item, dict)
-                else 2048
+                else DEFAULT_TEXTURE_RESOLUTION
             )
 
-            # Prevent unreasonable texture-resolution requests.
             if texture_res not in (512, 1024, 2048, 4096):
                 raise ValueError(
                     "texture_resolution must be 512, 1024, "
@@ -273,8 +345,20 @@ class SF3DModel:
                 else "none"
             )
 
-            if remesh_val == "none":
-                remesh_val = None
+            if remesh_val not in ("none", "triangle", "quad"):
+                raise ValueError(
+                    "remesh must be none, triangle, or quad."
+                )
+
+            vertex_count = (
+                int(item.get("vertex_count", -1))
+                if isinstance(item, dict)
+                else -1
+            )
+            if vertex_count == 0 or vertex_count < -1:
+                raise ValueError(
+                    "vertex_count must be -1 or a positive integer."
+                )
 
             with (
                 torch.inference_mode(),
@@ -287,7 +371,11 @@ class SF3DModel:
                     img,
                     bake_resolution=texture_res,
                     remesh=remesh_val,
+                    vertex_count=vertex_count,
                 )
+
+            if mesh.vertices.shape[0] == 0:
+                raise ValueError("No subject detected in the image.")
 
             output = io.BytesIO()
 
@@ -306,7 +394,10 @@ class SF3DModel:
                 3,
             )
 
-            print(f"[SF3D] Generation completed in {elapsed}s")
+            print(
+                f"[SF3D] Generation completed in {elapsed}s "
+                f"(texture={texture_res}, ratio={ratio})"
+            )
 
             return {
                 "success": True,
