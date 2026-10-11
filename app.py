@@ -29,8 +29,7 @@ models_volume = modal.Volume.from_name(VOLUME_NAME, create_if_missing=True)
 # IMAGE DEFINITION
 # ============================================================
 
-image = (
-    modal.Image.from_registry(
+image =    modal.Image.from_registry(
         "nvidia/cuda:12.1.1-devel-ubuntu22.04",
         add_python="3.10",
     )
@@ -43,13 +42,19 @@ image = (
         "libgl1",
         "libglib2.0-0",
     )
-    # 1. Install PyTorch from the official CUDA index
+    # 1. Install build tools first
+    .pip_install(
+        "setuptools==69.5.1",
+        "wheel",
+        "ninja",
+    )
+    # 2. Install PyTorch (CUDA 12.1)
     .pip_install(
         "torch==2.3.0",
         "torchvision==0.18.0",
         index_url="https://download.pytorch.org/whl/cu121",
     )
-    # 2. Install the rest of the packages from normal PyPI
+    # 3. Install remaining Python packages
     .pip_install(
         "fastapi[standard]",
         "rembg",
@@ -62,23 +67,22 @@ image = (
         "transformers",
         "open_clip_torch",
         "huggingface-hub",
-        "ninja",
     )
     .run_commands(
         # Clone official repo
         f"git clone --depth 1 https://github.com/Stability-AI/stable-fast-3d.git {SF3D_REPO}",
 
-        # Compile texture_baker with CUDA support for A10G (sm_86)
-        f"cd {SF3D_REPO} && "
+        # Compile texture_baker with CUDA support for A10G
+        f"cd {SF3D_REPO}/texture_baker && "
         "USE_CUDA=1 TORCH_CUDA_ARCH_LIST='8.6' FORCE_CUDA=1 "
-        "pip install --no-build-isolation -e ./texture_baker -v",
+        "pip install --no-build-isolation -e . -v",
 
         # Optional: uv_unwrapper
-        f"cd {SF3D_REPO} && "
+        f"cd {SF3D_REPO}/uv_unwrapper && "
         "USE_CUDA=1 TORCH_CUDA_ARCH_LIST='8.6' "
-        "pip install --no-build-isolation -e ./uv_unwrapper || true",
+        "pip install --no-build-isolation -e . || true",
 
-        # Verification
+        # Final verification
         "python -c \""
         "from texture_baker import texture_baker_cpp; "
         "assert hasattr(texture_baker_cpp, 'rasterize'), 'CUDA rasterize missing'; "
