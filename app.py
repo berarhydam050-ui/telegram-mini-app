@@ -37,49 +37,26 @@ image = (
         add_python="3.10",
     )
     .pip_install("fastapi[standard]")
-    # The published image built texture_baker without a GPU, so only the
-    # CPU kernel exists. Recompile it for the A10G (sm_86).
+    # One line on purpose. A multiline script is parsed as a Dockerfile,
+    # and `else` makes that parser fail. This rebuilds texture_baker with
+    # a CUDA kernel for the A10G (sm_86). The base image only has the CPU one.
     .run_commands(
-        r"""
-set -eu
-if [ -x /opt/conda/bin/python ]; then
-  PY=/opt/conda/bin/python
-else
-  PY=python
-fi
-export PATH="/opt/conda/bin:/usr/local/cuda/bin:${PATH}"
-if ! command -v nvcc >/dev/null 2>&1; then
-  echo "nvcc not on PATH" >&2
-  find /usr/local /opt /usr -name nvcc -type f 2>/dev/null | head -n 20 >&2
-  exit 1
-fi
-export CUDA_HOME="\( (dirname " \)(dirname "$(command -v nvcc)")")"
-export PATH="\( {CUDA_HOME}/bin: \){PATH}"
-export USE_CUDA=1
-export TORCH_CUDA_ARCH_LIST=8.6
-echo "CUDA_HOME=${CUDA_HOME}"
-nvcc --version
-"$PY" -c 'import torch; print("torch", torch.__version__, "cuda", torch.version.cuda)'
-"$PY" -m pip install ninja
-cd /app/stable_fast_3d/texture_baker
-rm -rf build
-"$PY" -m pip install -v --no-build-isolation --force-reinstall --no-deps .
-"$PY" - <<'PY'
-import torch
-dump = torch._C._dispatch_dump("texture_baker_cpp::rasterize")
-print(dump)
-ok = any(
-    line.strip().startswith("CUDA:")
-    and "registered" in line
-    and "Autograd" not in line
-    and "Autocast" not in line
-    for line in dump.splitlines()
-)
-if not ok:
-    raise SystemExit("texture_baker compiled without a CUDA kernel")
-print("texture_baker CUDA kernel registered")
-PY
-        """
+        "bash -lc '"
+        "export PATH=/opt/conda/bin:/usr/local/cuda/bin:$PATH && "
+        "command -v nvcc && "
+        "export CUDA_HOME=$(dirname $(dirname $(command -v nvcc))) && "
+        "export PATH=$CUDA_HOME/bin:$PATH && "
+        "export USE_CUDA=1 && "
+        "export TORCH_CUDA_ARCH_LIST=8.6 && "
+        "echo CUDA_HOME=$CUDA_HOME && "
+        "nvcc --version && "
+        "python -c \"import torch; print(torch.__version__, torch.version.cuda)\" && "
+        "python -m pip install ninja && "
+        "cd /app/stable_fast_3d/texture_baker && "
+        "rm -rf build && "
+        "python -m pip install --no-build-isolation --force-reinstall --no-deps . && "
+        "python -c \"import torch; d=torch._C._dispatch_dump(\\\"texture_baker_cpp::rasterize\\\"); print(d); ok=any(x.strip().startswith(\\\"CUDA:\\\") and \\\"registered\\\" in x and \\\"Autograd\\\" not in x and \\\"Autocast\\\" not in x for x in d.splitlines()); assert ok, d\""
+        "'"
     )
 )
 
