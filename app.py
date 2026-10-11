@@ -30,7 +30,9 @@ models_volume = modal.Volume.from_name(
 )
 
 # ============================================================
-# IMAGE DEFINITION (Dockerfile-safe)
+# IMAGE DEFINITION
+# We no longer try to recompile CUDA extensions because the
+# base image does not contain nvcc.
 # ============================================================
 
 image = (
@@ -46,29 +48,6 @@ image = (
         "Pillow",
         "numpy",
         "trimesh",
-        "ninja",
-    )
-    .run_commands(
-        # 1. Fail early if nvcc is missing
-        "which nvcc || (echo 'ERROR: nvcc not found' && exit 1)",
-
-        # 2. Build the CUDA extension (single-line, safe for Dockerfile)
-        f"if [ -d {SF3D_REPO} ]; then "
-        f"cd {SF3D_REPO} && "
-        "echo '=== Building stable_fast_3d with CUDA support ===' && "
-        "FORCE_CUDA=1 TORCH_CUDA_ARCH_LIST='8.6' "
-        "pip install --no-build-isolation -e . -v ; "
-        "else echo 'ERROR: SF3D_REPO not found' && exit 1; fi",
-
-        # 3. Sanity check that the CUDA operator exists
-        "python -c \""
-        "import torch; "
-        "print('PyTorch:', torch.__version__); "
-        "print('CUDA available:', torch.cuda.is_available()); "
-        "from texture_baker import texture_baker_cpp; "
-        "print('texture_baker_cpp imported'); "
-        "print('Has rasterize:', hasattr(texture_baker_cpp, 'rasterize'))"
-        "\"",
     )
 )
 
@@ -297,7 +276,7 @@ class SF3DModel:
         if not torch.cuda.is_available():
             raise RuntimeError("CUDA is unavailable on this Modal worker.")
 
-        # Runtime check for the CUDA texture baker
+        # Strong runtime check – this will catch the original problem early
         try:
             from texture_baker import texture_baker_cpp
             if not hasattr(texture_baker_cpp, "rasterize"):
@@ -307,7 +286,9 @@ class SF3DModel:
             print("[SF3D] texture_baker CUDA extension OK")
         except Exception as e:
             raise RuntimeError(
-                f"texture_baker CUDA extension failed to load: {e}"
+                f"texture_baker CUDA extension failed to load: {e}\n"
+                "Your base image was built without CUDA support for texture_baker. "
+                "You need to rebuild the base image with FORCE_CUDA=1 and nvcc available."
             ) from e
 
         from stable_fast_3d.sf3d.system import SF3D
