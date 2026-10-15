@@ -12,6 +12,10 @@ import types
 
 import traceback
 
+import uuid
+
+from pathlib import Path
+
 from typing import Any
 
 import modal
@@ -256,20 +260,23 @@ class SF3DModel:
                         remesh=remesh_option if remesh_option != "none" else None,
                     )
 
-            output = io.BytesIO()
-            mesh.export(output, file_type="glb")
-            glb_bytes = output.getvalue()
+            glb_bytes = mesh.export(file_type="glb")
 
             if not glb_bytes:
                 raise RuntimeError("SF3D returned an empty GLB.")
 
-            encoded = base64.b64encode(glb_bytes).decode("ascii")
+            asset_id = str(uuid.uuid4())
+            asset_path = Path(CACHE_DIR) / "outputs" / f"{asset_id}.glb"
+            asset_path.parent.mkdir(parents=True, exist_ok=True)
+            asset_path.write_bytes(glb_bytes)
+            models_volume.commit()
 
             return {
                 "success": True,
                 "format": "glb",
                 "mime_type": "model/gltf-binary",
-                "model_base64": encoded,
+                "asset_id": asset_id,
+                "download_url": f"/download/{asset_id}",
                 "texture_resolution": texture_resolution,
                 "remesh": remesh_option,
             }
@@ -286,6 +293,7 @@ class SF3DModel:
 @modal.asgi_app()
 def generate():
     from fastapi import FastAPI, HTTPException, Request
+    from fastapi.responses import FileResponse
     from fastapi.middleware.cors import CORSMiddleware
 
     web_app = FastAPI(title="SF3D Image-to-3D API")
@@ -300,6 +308,18 @@ def generate():
     @web_app.get("/")
     async def health():
         return {"status": "ok", "service": APP_NAME, "model": MODEL_ID}
+
+    @web_app.get("/download/{asset_id}")
+    async def download_asset(asset_id: str):
+        path = Path(CACHE_DIR) / "outputs" / f"{asset_id}.glb"
+        if not path.exists():
+            raise HTTPException(status_code=404, detail="Asset not found or expired")
+        return FileResponse(
+            path,
+            media_type="model/gltf-binary",
+            filename=f"{asset_id}.glb",
+            headers={"Content-Disposition": f'attachment; filename="{asset_id}.glb"'}
+        )
 
     @web_app.post("/")
     async def run_generate(request: Request):
