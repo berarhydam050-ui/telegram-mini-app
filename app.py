@@ -289,7 +289,11 @@ class SF3DModel:
 
 
 
-@app.function(image=image, scaledown_window=2)
+@app.function(
+    image=image,
+    volumes={CACHE_DIR: models_volume},
+    scaledown_window=2,
+)
 @modal.asgi_app()
 def generate():
     from fastapi import FastAPI, HTTPException, Request
@@ -338,4 +342,3 @@ def generate():
             ) from exc
 
     return web_app
-        
