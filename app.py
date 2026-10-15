@@ -1,32 +1,53 @@
 import base64
+
 import binascii
+
 import io
+
 import os
+
 import sys
+
 import types
+
 import traceback
+
 from typing import Any
+
 import modal
 
+
 APP_NAME = "sf3d-backend"
+
 VOLUME_NAME = "sf3d-models-volume"
+
 CACHE_DIR = "/root/.cache"
 
+
 MODEL_ID = "stabilityai/stable-fast-3d"
+
 GPU_DEVICE = "cuda:0"
 
+
 DEFAULT_TEXTURE_RESOLUTION = 2048
+
 MAX_IMAGE_PIXELS = 40_000_000
+
 FOREGROUND_SCALE = 0.85
+
 REMESH_MODE = "none"
 
+
 app = modal.App(APP_NAME)
+
 models_volume = modal.Volume.from_name(VOLUME_NAME, create_if_missing=True)
+
 
 image = modal.Image.from_registry(
     "rhydam12/sf3d-gpu-worker:latest",
     add_python="3.10",
 )
+
 
 
 def decode_image(data: Any):
@@ -61,6 +82,7 @@ def decode_image(data: Any):
     return result
 
 
+
 def remove_background_and_center(image):
     from PIL import Image
     from rembg import new_session, remove
@@ -90,6 +112,7 @@ def remove_background_and_center(image):
     return canvas
 
 
+
 @app.cls(
     image=image,
     gpu="A10G",
@@ -102,6 +125,7 @@ def remove_background_and_center(image):
     max_containers=5,
 )
 class SF3DModel:
+
 
     @modal.enter(snap=True)
     def load_model(self):
@@ -187,6 +211,7 @@ class SF3DModel:
         torch.cuda.synchronize(self.device)
         print("Snapshot model initialization complete.")
 
+
     @modal.method()
     def process_image(self, item: dict):
         import torch
@@ -232,7 +257,7 @@ class SF3DModel:
                     )
 
             output = io.BytesIO()
-            mesh.export(output, file_type="glb", include_normals=True)
+            mesh.export(output, file_type="glb")
             glb_bytes = output.getvalue()
 
             if not glb_bytes:
@@ -254,6 +279,7 @@ class SF3DModel:
             raise
         finally:
             torch.cuda.empty_cache()
+
 
 
 @app.function(image=image, scaledown_window=2)
