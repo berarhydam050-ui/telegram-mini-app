@@ -112,7 +112,7 @@ def remove_background_and_center(image):
     image=image,
     gpu="L4",  # Cost-efficient high-performance GPU with 24GB VRAM
     volumes={CACHE_DIR: models_volume},
-    scaledown_window=45,  # Better balance: fewer cold starts, still cheap
+    scaledown_window=2,  # Minimal idle time to avoid extra charges
     enable_memory_snapshot=True,
     experimental_options={"enable_gpu_snapshot": True},
     secrets=[modal.Secret.from_name("huggingface-secret")],
@@ -295,7 +295,7 @@ class SF3DModel:
 @app.function(
     image=image,
     volumes={CACHE_DIR: models_volume},
-    scaledown_window=45,
+    scaledown_window=2,  # Minimal idle time to avoid extra charges
 )
 @modal.asgi_app()
 def generate():
