@@ -22,8 +22,8 @@ GPU_DEVICE = "cuda:0"
 
 DEFAULT_TEXTURE_RESOLUTION = 2048
 MAX_IMAGE_PIXELS = 40_000_000
-FOREGROUND_SCALE = 0.90
-REMESH_MODE = "triangle"
+FOREGROUND_SCALE = 0.92
+REMESH_MODE = "none"
 
 UUID_RE = re.compile(
     r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
@@ -89,7 +89,8 @@ def remove_background_and_center(image):
         raise ValueError("No foreground subject was detected.")
 
     subject = rgba.crop(bbox)
-    canvas_size = 1024
+    # Larger canvas + sharper resize for more defined shapes
+    canvas_size = 1280
     canvas = Image.new("RGBA", (canvas_size, canvas_size), (0, 0, 0, 0))
     max_dim = int(canvas_size * FOREGROUND_SCALE)
     subject.thumbnail((max_dim, max_dim), Image.Resampling.LANCZOS)
