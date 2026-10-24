@@ -1,4 +1,3 @@
-
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -102,15 +101,16 @@
             border-radius: 18px;
             padding: 32px 16px;
             text-align: center;
-            cursor: pointer;
             transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
             background: rgba(99, 102, 241, 0.02);
-            position: relative;
+            position: relative; /* Essential for covering the card with absolute file input */
             min-height: 180px;
             display: flex;
             flex-direction: column;
             align-items: center;
             justify-content: center;
+            overflow: hidden;
+            cursor: pointer;
         }
 
         .upload-zone:hover {
@@ -126,6 +126,17 @@
         }
 
         .upload-zone:active { transform: scale(0.985); }
+
+        /* Absolute file input overlay guarantees reliable touch triggering on mobile */
+        .upload-zone input[type="file"] {
+            position: absolute;
+            inset: 0;
+            width: 100%;
+            height: 100%;
+            opacity: 0;
+            cursor: pointer;
+            z-index: 20;
+        }
 
         .upload-icon-wrapper {
             width: 54px;
@@ -150,9 +161,9 @@
             border-radius: 14px;
             display: none;
             object-fit: contain;
+            position: relative;
+            z-index: 10;
         }
-
-        input[type="file"] { display: none; }
 
         .btn {
             display: flex;
@@ -284,6 +295,7 @@
             align-items: center;
             justify-content: center;
             transition: background 0.15s;
+            z-index: 10;
         }
 
         .gallery-item .delete-btn:hover { background: rgba(244, 63, 94, 0.25); }
@@ -352,7 +364,7 @@
 
     <div class="container">
         <div class="card">
-            <div class="upload-zone" id="uploadZone" onclick="document.getElementById('fileInput').click()">
+            <div class="upload-zone" id="uploadZone">
                 <div id="uploadPlaceholder">
                     <div class="upload-icon-wrapper">📷</div>
                     <div class="upload-title">Tap to upload a photo</div>
@@ -553,12 +565,4 @@
                     currentModelUrl = URL.createObjectURL(currentModelBlob);
                     currentAssetId = data.asset_id;
                 } else {
-                    throw new Error("No 3D model returned from server");
-                }
-
-                viewer.src = currentModelUrl;
-                viewer.style.display = "block";
-                actions.style.display = "flex";
-                document.getElementById("qualityNote").style.display = "block";
-                setStatus("3D Model successfully generated!", "success");
-                if (Telegram.HapticFeedback)
+                    throw new Erro
