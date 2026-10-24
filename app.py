@@ -1,48 +1,28 @@
 import base64
-
 import binascii
-
 import io
-
 import json
-
 import os
-
 import re
-
 import sys
-
 import types
-
 import traceback
-
 import uuid
-
 from pathlib import Path
-
 from typing import Any
-
 import modal
 
 
 APP_NAME = "sf3d-backend"
-
 VOLUME_NAME = "sf3d-models-volume"
-
 CACHE_DIR = "/root/.cache"
 
-
 MODEL_ID = "stabilityai/stable-fast-3d"
-
 GPU_DEVICE = "cuda:0"
 
-
 DEFAULT_TEXTURE_RESOLUTION = 2048
-
 MAX_IMAGE_PIXELS = 40_000_000
-
 FOREGROUND_SCALE = 0.90
-
 REMESH_MODE = "triangle"
 
 UUID_RE = re.compile(
@@ -53,15 +33,12 @@ MAX_STORED_GLB = 80 * 1024 * 1024
 
 
 app = modal.App(APP_NAME)
-
 models_volume = modal.Volume.from_name(VOLUME_NAME, create_if_missing=True)
-
 
 image = modal.Image.from_registry(
     "rhydam12/sf3d-gpu-worker:latest",
     add_python="3.10",
 )
-
 
 
 def decode_image(data: Any):
@@ -96,7 +73,6 @@ def decode_image(data: Any):
     return result
 
 
-
 def remove_background_and_center(image):
     from PIL import Image
     from rembg import new_session, remove
@@ -112,24 +88,24 @@ def remove_background_and_center(image):
     if bbox is None:
         raise ValueError("No foreground subject was detected.")
 
-    foreground = rgba.crop(bbox)
-    side = max(foreground.width, foreground.height)
-    target_side = max(1, int(side * FOREGROUND_SCALE))
-    scale = target_side / max(foreground.width, foreground.height)
-    new_size = (max(1, int(foreground.width * scale)), max(1, int(foreground.height * scale)))
-    foreground = foreground.resize(new_size, Image.Resampling.LANCZOS)
-
-    canvas_side = max(new_size)
-    canvas = Image.new("RGBA", (canvas_side, canvas_side), (0, 0, 0, 0))
-    position = ((canvas_side - foreground.width) // 2, (canvas_side - foreground.height) // 2)
-    canvas.alpha_composite(foreground, dest=position)
-    return canvas
-
+    subject = rgba.crop(bbox)
+    
+    # Fixed square canvas with proper margin padding (Fixes edge clipping)
+    canvas_size = 1024
+    canvas = Image.new("RGBA", (canvas_size, canvas_size), (0, 0, 0, 0))
+    
+    max_dim = int(canvas_size * FOREGROUND_SCALE)
+    subject.thumbnail((max_dim, max_dim), Image.Resampling.LANCZOS)
+    
+    paste_x = (canvas_size - subject.width) // 2
+    paste_y = (canvas_size - subject.height) // 2
+    canvas.paste(subject, (paste_x, paste_y), subject)
+    return canvas.convert("RGB")
 
 
 @app.cls(
     image=image,
-    gpu="A10G",
+    gpu="L4",  # Tested for cost/performance balance (change to "A10G" if preferred)
     volumes={CACHE_DIR: models_volume},
     scaledown_window=2,
     enable_memory_snapshot=True,
@@ -139,7 +115,6 @@ def remove_background_and_center(image):
     max_containers=5,
 )
 class SF3DModel:
-
 
     @modal.enter(snap=True)
     def load_model(self):
@@ -225,7 +200,6 @@ class SF3DModel:
         torch.cuda.synchronize(self.device)
         print("Snapshot model initialization complete.")
 
-
     @modal.method()
     def process_image(self, item: dict):
         import torch
@@ -261,9 +235,16 @@ class SF3DModel:
         texture_resolution = int(item.get("texture_resolution", DEFAULT_TEXTURE_RESOLUTION))
         remesh_option = item.get("remesh", REMESH_MODE)
 
+        # Dynamic dtype fallback (bfloat16 if supported, else float16)
+        dtype = (
+            torch.bfloat16
+            if torch.cuda.is_bf16_supported()
+            else torch.float16
+        )
+
         try:
             with torch.inference_mode():
-                with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
+                with torch.autocast(device_type="cuda", dtype=dtype):
                     mesh, _ = self.model.run_image(
                         processed,
                         bake_resolution=texture_resolution,
@@ -281,7 +262,6 @@ class SF3DModel:
             asset_path.write_bytes(glb_bytes)
             models_volume.commit()
 
-            # Return base64 so frontend does not need a second download request
             model_b64 = base64.b64encode(glb_bytes).decode("utf-8")
 
             return {
@@ -300,7 +280,6 @@ class SF3DModel:
             raise
         finally:
             torch.cuda.empty_cache()
-
 
 
 @app.function(
@@ -345,7 +324,6 @@ def generate():
         path = glb_path(asset_id)
         reload_models()
         if not path.is_file():
-            # The GPU worker commits on another container; give the volume a moment.
             import time
             time.sleep(1.2)
             reload_models()
@@ -407,3 +385,4 @@ def generate():
             ) from exc
 
     return web_app
+    
