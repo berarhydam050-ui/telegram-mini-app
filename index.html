@@ -312,6 +312,17 @@
         let currentModelBlob = null;
         let currentAssetId = null;
         let currentPreview = null;
+        const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+        function glbFilename(id) {
+            const safe = String(id || "model").replace(/[^a-zA-Z0-9-]/g, "").slice(0, 40);
+            return "form3d-" + safe + ".glb";
+        }
+
+        function publicGlbUrl(id) {
+            if (!id || !UUID_RE.test(String(id))) return null;
+            return MODAL_BASE + "/download/" + id;
+        }
 
         function setStatus(msg, type = "") {
             const el = document.getElementById("status");
@@ -436,57 +447,105 @@
         }
 
         async function downloadModel() {
-            if (!currentModelBlob && !currentModelUrl) return;
+            if (!currentModelBlob && !currentAssetId) return;
 
-            const filename = "form3d-" + (currentAssetId || Date.now()) + ".glb";
+            const btnRow = document.getElementById("actionButtons");
+            const buttons = btnRow ? btnRow.querySelectorAll("button") : [];
+            buttons.forEach((b) => { b.disabled = true; });
 
-            // Method 1: Telegram native download (Bot API 7+ / recent clients)
-            if (Telegram.downloadFile && currentModelUrl) {
-                try {
-                    Telegram.downloadFile({
-                        url: currentModelUrl,
-                        file_name: filename
-                    });
-                    setStatus("Download started…", "success");
-                    if (Telegram.HapticFeedback) Telegram.HapticFeedback.notificationOccurred("success");
-                    return;
-                } catch (e) {
-                    console.warn("Telegram.downloadFile failed", e);
-                }
-            }
-
-            // Method 2: Standard anchor download
             try {
-                const blob = currentModelBlob || await (await fetch(currentModelUrl)).blob();
-                const url = URL.createObjectURL(blob);
+                setStatus("Preparing the .glb file…");
+                const httpsUrl = await ensurePublicGlb();
+                const filename = glbFilename(currentAssetId);
+                if (!httpsUrl) {
+                    setStatus("Could not prepare a .glb link. Generate the model again.", "error");
+                    return;
+                }
+
+                const tg = window.Telegram && window.Telegram.WebApp;
+                const nativeOk = tg && typeof tg.downloadFile === "function" &&
+                    (!tg.isVersionAtLeast || tg.isVersionAtLeast("8.0"));
+
+                if (nativeOk) {
+                    setStatus("Allow the Telegram popup to save " + filename);
+                    try {
+                        tg.downloadFile({ url: httpsUrl, file_name: filename }, function (accepted) {
+                            if (accepted) {
+                                setStatus("Saving " + filename + " — check your Downloads folder", "success");
+                                if (tg.HapticFeedback) tg.HapticFeedback.notificationOccurred("success");
+                            } else {
+                                setStatus("Download cancelled. Tap Download GLB and tap Allow.", "error");
+                            }
+                        });
+                        return;
+                    } catch (e) {
+                        const reason = (e && e.message) || String(e || "");
+                        if (reason.indexOf("PopupOpened") !== -1) {
+                            setStatus("Allow the download popup that's already open.");
+                            return;
+                        }
+                        console.warn("Telegram.downloadFile failed", e);
+                    }
+                }
+
+                if (await shareGlbFile(filename)) {
+                    setStatus("Share sheet opened — choose Save to keep the .glb", "success");
+                    return;
+                }
+
                 const a = document.createElement("a");
-                a.href = url;
+                a.href = httpsUrl;
                 a.download = filename;
-                a.style.display = "none";
+                a.target = "_blank";
+                a.rel = "noopener";
                 document.body.appendChild(a);
                 a.click();
-                setTimeout(() => {
-                    document.body.removeChild(a);
-                    URL.revokeObjectURL(url);
-                }, 1500);
-                setStatus("Download started — check your Downloads folder", "success");
-                if (Telegram.HapticFeedback) Telegram.HapticFeedback.notificationOccurred("success");
-                return;
-            } catch (e) {
-                console.warn("Anchor download failed", e);
-            }
-
-            // Method 3: Share via Telegram (always works inside Mini App)
-            try {
-                if (Telegram.openTelegramLink && currentModelUrl) {
-                    // Fallback: open blob URL so user can long-press / share
-                    window.open(currentModelUrl, "_blank");
-                    setStatus("Opened model — long-press to save/share", "success");
-                    return;
+                a.remove();
+                setStatus("Opened " + filename + ". If nothing saved, update Telegram and try again.", "success");
+            } catch (error) {
+                console.error(error);
+                if (error && error.name === "AbortError") {
+                    setStatus("Download cancelled.", "error");
+                } else {
+                    setStatus("Could not save the .glb. " + (error.message || "Try again."), "error");
                 }
-            } catch (e) {}
+            } finally {
+                buttons.forEach((b) => { b.disabled = false; });
+            }
+        }
 
-            setStatus("Could not auto-download. Use ★ Save, then share from Gallery.", "error");
+        async function ensurePublicGlb() {
+            const existing = publicGlbUrl(currentAssetId);
+            if (existing) {
+                try {
+                    const probe = await fetch(existing, { method: "HEAD" });
+                    if (probe.ok || probe.status === 206) return existing;
+                    if (probe.status !== 404) return existing;
+                } catch (e) {
+                    // Web view blocked the probe. Telegram itself can still fetch the https link.
+                    return existing;
+                }
+            }
+            if (!currentModelBlob) return null;
+            const response = await fetch(MODAL_BASE + "/store", {
+                method: "POST",
+                headers: { "Content-Type": "model/gltf-binary" },
+                body: currentModelBlob
+            });
+            const data = await response.json().catch(() => ({}));
+            if (!response.ok || !data.asset_id) {
+                throw new Error(data.detail || data.error || "Could not publish the .glb");
+            }
+            currentAssetId = data.asset_id;
+            return publicGlbUrl(currentAssetId);
+        }
+
+        async function shareGlbFile(filename) {
+            if (!currentModelBlob || !navigator.share || !navigator.canShare) return false;
+            const file = new File([currentModelBlob], filename, { type: "model/gltf-binary" });
+            if (!navigator.canShare({ files: [file] })) return false;
+            await navigator.share({ files: [file], title: filename });
+            return true;
         }
 
         function getGallery() {

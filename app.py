@@ -4,7 +4,11 @@ import binascii
 
 import io
 
+import json
+
 import os
+
+import re
 
 import sys
 
@@ -40,6 +44,12 @@ MAX_IMAGE_PIXELS = 40_000_000
 FOREGROUND_SCALE = 0.90
 
 REMESH_MODE = "triangle"
+
+UUID_RE = re.compile(
+    r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+    re.IGNORECASE,
+)
+MAX_STORED_GLB = 80 * 1024 * 1024
 
 
 app = modal.App(APP_NAME)
@@ -307,11 +317,25 @@ def generate():
     web_app = FastAPI(title="SF3D Image-to-3D API")
     web_app.add_middleware(
         CORSMiddleware,
-        allow_origins=["*"],
+        allow_origins=[
+            "https://web.telegram.org",
+            "https://telegram-mini-app-hobbies5.vercel.app",
+        ],
+        allow_origin_regex=r"https://.*\.vercel\.app",
         allow_credentials=False,
-        allow_methods=["POST", "GET", "OPTIONS"],
+        allow_methods=["POST", "GET", "HEAD", "OPTIONS"],
         allow_headers=["*"],
+        expose_headers=["Content-Disposition", "Content-Length", "Content-Type"],
     )
+
+    def reload_models():
+        try:
+            models_volume.reload()
+        except Exception:
+            traceback.print_exc()
+
+    def glb_path(asset_id: str) -> Path:
+        return Path(CACHE_DIR) / "outputs" / f"{asset_id}.glb"
 
     @web_app.get("/")
     async def health():
@@ -319,15 +343,57 @@ def generate():
 
     @web_app.get("/download/{asset_id}")
     async def download_asset(asset_id: str):
-        path = Path(CACHE_DIR) / "outputs" / f"{asset_id}.glb"
-        if not path.exists():
+        if not UUID_RE.fullmatch(asset_id):
+            raise HTTPException(status_code=400, detail="Bad asset id")
+        path = glb_path(asset_id)
+        reload_models()
+        if not path.is_file():
+            # The GPU worker commits on another container; give the volume a moment.
+            import time
+            time.sleep(1.2)
+            reload_models()
+        if not path.is_file():
             raise HTTPException(status_code=404, detail="Asset not found or expired")
+        filename = f"form3d-{asset_id}.glb"
         return FileResponse(
             path,
             media_type="model/gltf-binary",
-            filename=f"{asset_id}.glb",
-            headers={"Content-Disposition": f'attachment; filename="{asset_id}.glb"'}
+            filename=filename,
+            headers={
+                # Telegram Web only saves the file when this origin is explicit.
+                "Access-Control-Allow-Origin": "https://web.telegram.org",
+                "Cache-Control": "private, max-age=86400",
+                "X-Content-Type-Options": "nosniff",
+            },
         )
+
+    @web_app.post("/store")
+    async def store_glb(request: Request):
+        raw = await request.body()
+        if raw[:1] == b"{":
+            try:
+                payload = json.loads(raw)
+                encoded = payload.get("model") or ""
+                if isinstance(encoded, str) and encoded.startswith("data:"):
+                    encoded = encoded.split(",", 1)[-1]
+                raw = base64.b64decode(encoded)
+            except Exception as exc:
+                raise HTTPException(status_code=400, detail="Invalid GLB payload") from exc
+        if len(raw) < 20 or raw[:4] != b"glTF":
+            raise HTTPException(status_code=400, detail="Expected a GLB file")
+        if len(raw) > MAX_STORED_GLB:
+            raise HTTPException(status_code=413, detail="GLB is too large")
+        asset_id = str(uuid.uuid4())
+        path = glb_path(asset_id)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(raw)
+        models_volume.commit()
+        return {
+            "success": True,
+            "asset_id": asset_id,
+            "download_url": f"/download/{asset_id}",
+            "filename": f"form3d-{asset_id}.glb",
+        }
 
     @web_app.post("/")
     async def run_generate(request: Request):
