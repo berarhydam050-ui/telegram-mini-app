@@ -1,262 +1,362 @@
+
 <!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no"/>
-    <title>Form3D — Image to 3D</title>
+    <title>Form3D — Image to 3D Pro</title>
     <script src="https://telegram.org/js/telegram-web-app.js"></script>
     <script type="module" src="https://ajax.googleapis.com/ajax/libs/model-viewer/3.4.0/model-viewer.min.js"></script>
     <style>
         :root {
-            --bg: var(--tg-theme-bg-color, #0b0f14);
-            --text: var(--tg-theme-text-color, #f4f6f8);
-            --btn: var(--tg-theme-button-color, #3b82f6);
-            --btn-text: var(--tg-theme-button-text-color, #ffffff);
-            --card: var(--tg-theme-secondary-bg-color, #141a22);
-            --hint: var(--tg-theme-hint-color, #8b9aab);
-            --border: rgba(255,255,255,0.08);
-            --success: #22c55e;
-            --danger: #ef4444;
-            --accent: #60a5fa;
+            --bg: #07090e;
+            --surface: rgba(18, 24, 38, 0.75);
+            --surface-solid: #121826;
+            --text: #f8fafc;
+            --hint: #94a3b8;
+            --primary-gradient: linear-gradient(135deg, #6366f1 0%, #3b82f6 50%, #2563eb 100%);
+            --accent-glow: rgba(99, 102, 241, 0.25);
+            --border: rgba(255, 255, 255, 0.08);
+            --border-hover: rgba(99, 102, 241, 0.4);
+            --success: #10b981;
+            --danger: #f43f5e;
         }
+
         * { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
+
         body {
             font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", Roboto, sans-serif;
             background: var(--bg);
+            background-image: 
+                radial-gradient(circle at 10% 10%, rgba(99, 102, 241, 0.08) 0%, transparent 40%),
+                radial-gradient(circle at 90% 90%, rgba(59, 130, 246, 0.06) 0%, transparent 40%);
             color: var(--text);
             min-height: 100vh;
-            padding: 0 0 40px;
+            padding: 0 0 50px;
             overflow-x: hidden;
         }
+
         .header {
-            padding: 20px 20px 12px;
+            padding: 24px 20px 16px;
             text-align: center;
             position: sticky;
             top: 0;
-            background: linear-gradient(to bottom, var(--bg) 70%, transparent);
-            z-index: 10;
+            background: rgba(7, 9, 14, 0.85);
+            backdrop-filter: blur(20px);
+            -webkit-backdrop-filter: blur(20px);
+            z-index: 100;
+            border-bottom: 1px solid var(--border);
         }
-        .brand {
-            font-size: 0.75rem;
-            letter-spacing: 0.14em;
-            text-transform: uppercase;
-            color: var(--accent);
-            font-weight: 600;
-            margin-bottom: 4px;
-        }
-        .header h1 {
-            font-size: 1.4rem;
+
+        .badge-pill {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            background: rgba(99, 102, 241, 0.12);
+            color: #818cf8;
+            font-size: 0.7rem;
             font-weight: 700;
-            letter-spacing: -0.02em;
+            text-transform: uppercase;
+            letter-spacing: 0.12em;
+            padding: 4px 12px;
+            border-radius: 20px;
+            border: 1px solid rgba(99, 102, 241, 0.25);
+            margin-bottom: 8px;
         }
+
+        .header h1 {
+            font-size: 1.5rem;
+            font-weight: 800;
+            letter-spacing: -0.03em;
+            background: linear-gradient(180deg, #ffffff 0%, #cbd5e1 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+
         .header p {
-            font-size: 0.82rem;
+            font-size: 0.85rem;
             color: var(--hint);
             margin-top: 4px;
+            font-weight: 400;
         }
+
         .container {
-            max-width: 400px;
+            max-width: 420px;
             margin: 0 auto;
-            padding: 0 16px;
+            padding: 16px;
         }
+
         .card {
-            background: var(--card);
+            background: var(--surface);
+            backdrop-filter: blur(20px);
+            -webkit-backdrop-filter: blur(20px);
             border: 1px solid var(--border);
-            border-radius: 20px;
-            padding: 18px;
+            border-radius: 24px;
+            padding: 20px;
             margin-bottom: 20px;
-            box-shadow: 0 8px 32px rgba(0,0,0,0.25);
+            box-shadow: 0 16px 40px rgba(0, 0, 0, 0.4);
         }
+
         .upload-zone {
-            border: 1.5px dashed rgba(96,165,250,0.45);
-            border-radius: 16px;
-            padding: 28px 16px;
+            border: 2px dashed rgba(99, 102, 241, 0.3);
+            border-radius: 18px;
+            padding: 32px 16px;
             text-align: center;
             cursor: pointer;
-            transition: all 0.2s ease;
-            background: rgba(96,165,250,0.04);
+            transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+            background: rgba(99, 102, 241, 0.02);
             position: relative;
-            min-height: 160px;
+            min-height: 180px;
             display: flex;
             flex-direction: column;
             align-items: center;
             justify-content: center;
         }
+
+        .upload-zone:hover {
+            border-color: var(--border-hover);
+            background: rgba(99, 102, 241, 0.05);
+        }
+
         .upload-zone.has-image {
             border-style: solid;
-            border-color: rgba(96,165,250,0.25);
+            border-color: rgba(99, 102, 241, 0.4);
             padding: 12px;
+            background: #090d16;
         }
+
         .upload-zone:active { transform: scale(0.985); }
-        .upload-icon { font-size: 2rem; margin-bottom: 8px; opacity: 0.7; }
-        .upload-title { font-size: 0.95rem; font-weight: 600; margin-bottom: 4px; }
+
+        .upload-icon-wrapper {
+            width: 54px;
+            height: 54px;
+            border-radius: 16px;
+            background: rgba(99, 102, 241, 0.1);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 1.5rem;
+            margin-bottom: 12px;
+            border: 1px solid rgba(99, 102, 241, 0.2);
+            box-shadow: 0 8px 16px rgba(99, 102, 241, 0.1);
+        }
+
+        .upload-title { font-size: 0.95rem; font-weight: 650; margin-bottom: 4px; color: #f1f5f9; }
         .upload-sub { font-size: 0.78rem; color: var(--hint); }
+
         #preview-img {
             max-width: 100%;
-            max-height: 220px;
-            border-radius: 12px;
+            max-height: 240px;
+            border-radius: 14px;
             display: none;
             object-fit: contain;
         }
+
         input[type="file"] { display: none; }
+
         .btn {
             display: flex;
             align-items: center;
             justify-content: center;
             gap: 8px;
-            background: linear-gradient(135deg, #3b82f6, #2563eb);
+            background: var(--primary-gradient);
             color: #fff;
             border: none;
-            padding: 15px;
+            padding: 16px;
             font-size: 0.95rem;
-            font-weight: 600;
-            border-radius: 14px;
+            font-weight: 650;
+            border-radius: 16px;
             cursor: pointer;
             width: 100%;
-            margin-top: 14px;
-            transition: all 0.15s ease;
-            box-shadow: 0 4px 16px rgba(37,99,235,0.35);
+            margin-top: 16px;
+            transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+            box-shadow: 0 8px 24px rgba(59, 130, 246, 0.35);
         }
-        .btn:disabled { opacity: 0.4; cursor: not-allowed; box-shadow: none; }
+
+        .btn:disabled { 
+            opacity: 0.35; 
+            cursor: not-allowed; 
+            box-shadow: none; 
+            background: #1e293b;
+            color: #64748b;
+        }
+
         .btn:active:not(:disabled) { transform: scale(0.97); }
+
         .btn-outline {
-            background: transparent;
-            border: 1.5px solid rgba(96,165,250,0.5);
-            color: var(--accent);
+            background: rgba(255, 255, 255, 0.04);
+            border: 1px solid rgba(255, 255, 255, 0.12);
+            color: #f1f5f9;
             box-shadow: none;
         }
-        .btn-outline:active:not(:disabled) { background: rgba(96,165,250,0.1); }
-        .btn-row { display: flex; gap: 10px; margin-top: 12px; }
-        .btn-row .btn { margin-top: 0; flex: 1; padding: 13px 8px; font-size: 0.88rem; }
+
+        .btn-outline:hover { background: rgba(255, 255, 255, 0.08); }
+        .btn-outline:active:not(:disabled) { background: rgba(255, 255, 255, 0.12); }
+
+        .btn-row { display: flex; gap: 12px; margin-top: 12px; }
+        .btn-row .btn { margin-top: 0; flex: 1; padding: 14px 10px; font-size: 0.88rem; }
+
         #status {
-            margin-top: 14px;
-            font-size: 0.86rem;
+            margin-top: 16px;
+            font-size: 0.85rem;
             color: var(--hint);
             text-align: center;
-            min-height: 22px;
+            min-height: 24px;
             line-height: 1.4;
+            font-weight: 500;
         }
         #status.success { color: var(--success); }
         #status.error { color: var(--danger); }
+
         model-viewer {
             width: 100%;
-            height: 320px;
-            background: radial-gradient(ellipse at center, #1a2332 0%, #0a1018 70%);
-            border-radius: 16px;
-            margin-top: 14px;
+            height: 340px;
+            background: radial-gradient(circle at center, #111827 0%, #030712 80%);
+            border-radius: 18px;
+            margin-top: 16px;
             display: none;
-            border: 1px solid var(--border);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            box-shadow: inset 0 0 30px rgba(0,0,0,0.5);
         }
+
         .section-header {
             display: flex;
             justify-content: space-between;
             align-items: center;
-            margin: 28px 0 14px;
-            padding: 0 2px;
+            margin: 32px 0 14px;
+            padding: 0 4px;
         }
-        .section-header h2 { font-size: 1.05rem; font-weight: 650; }
-        .section-header span { font-size: 0.8rem; color: var(--hint); }
+        .section-header h2 { font-size: 1.1rem; font-weight: 700; letter-spacing: -0.01em; }
+        .section-header span { font-size: 0.8rem; color: var(--hint); font-weight: 500; }
+
         .gallery {
             display: grid;
             grid-template-columns: 1fr 1fr;
-            gap: 12px;
+            gap: 14px;
         }
+
         .gallery-item {
-            background: var(--card);
+            background: var(--surface);
+            backdrop-filter: blur(10px);
             border: 1px solid var(--border);
-            border-radius: 14px;
+            border-radius: 18px;
             overflow: hidden;
             cursor: pointer;
-            transition: transform 0.15s ease;
+            transition: all 0.2s ease;
             position: relative;
         }
+
+        .gallery-item:hover {
+            border-color: var(--border-hover);
+            transform: translateY(-2px);
+        }
+
         .gallery-item:active { transform: scale(0.97); }
+
         .gallery-item img {
             width: 100%;
-            height: 120px;
+            height: 130px;
             object-fit: cover;
             display: block;
-            background: #0a1018;
+            background: #030712;
         }
+
         .gallery-item .meta {
-            padding: 8px 10px 10px;
+            padding: 10px 12px;
             display: flex;
             justify-content: space-between;
             align-items: center;
+            background: rgba(18, 24, 38, 0.9);
         }
-        .gallery-item .date { font-size: 0.72rem; color: var(--hint); }
+
+        .gallery-item .date { font-size: 0.72rem; color: var(--hint); font-weight: 500; }
+
         .gallery-item .delete-btn {
-            background: rgba(239,68,68,0.15);
+            background: rgba(244, 63, 94, 0.15);
             color: var(--danger);
-            border: none;
-            border-radius: 6px;
-            width: 26px;
-            height: 26px;
+            border: 1px solid rgba(244, 63, 94, 0.3);
+            border-radius: 8px;
+            width: 28px;
+            height: 28px;
             font-size: 0.75rem;
             cursor: pointer;
             display: flex;
             align-items: center;
             justify-content: center;
+            transition: background 0.15s;
         }
+
+        .gallery-item .delete-btn:hover { background: rgba(244, 63, 94, 0.25); }
+
         .empty-state {
             grid-column: 1 / -1;
             text-align: center;
-            padding: 36px 16px;
+            padding: 40px 20px;
             color: var(--hint);
             font-size: 0.88rem;
             line-height: 1.5;
-            background: var(--card);
-            border-radius: 16px;
+            background: var(--surface);
+            border-radius: 20px;
             border: 1px dashed var(--border);
         }
+
         .empty-state strong {
             display: block;
             color: var(--text);
             margin-bottom: 6px;
             font-size: 0.95rem;
+            font-weight: 650;
         }
+
         .spinner {
             display: inline-block;
             width: 16px;
             height: 16px;
-            border: 2.5px solid rgba(255,255,255,0.25);
+            border: 2px solid rgba(255, 255, 255, 0.2);
             border-top-color: #fff;
             border-radius: 50%;
-            animation: spin 0.65s linear infinite;
+            animation: spin 0.6s linear infinite;
             vertical-align: middle;
             margin-right: 8px;
         }
+
         @keyframes spin { to { transform: rotate(360deg); } }
+
         .tip {
             font-size: 0.75rem;
             color: var(--hint);
             text-align: center;
-            margin-top: 18px;
-            padding: 0 8px;
-            line-height: 1.45;
+            margin-top: 24px;
+            padding: 0 12px;
+            line-height: 1.5;
         }
+
         .quality-note {
-            font-size: 0.72rem;
+            font-size: 0.75rem;
             color: var(--hint);
             text-align: center;
-            margin-top: 8px;
+            margin-top: 12px;
+            background: rgba(255, 255, 255, 0.03);
+            padding: 8px 12px;
+            border-radius: 10px;
+            border: 1px solid var(--border);
         }
     </style>
 </head>
 <body>
     <div class="header">
-        <div class="brand">Form3D</div>
-        <h1>Image → 3D Model</h1>
-        <p>Turn any photo into a downloadable 3D file</p>
+        <div class="badge-pill">✨ Powered by Stable Fast 3D</div>
+        <h1>Form3D Studio</h1>
+        <p>Transform any photo into an immersive 3D model</p>
     </div>
 
     <div class="container">
         <div class="card">
             <div class="upload-zone" id="uploadZone" onclick="document.getElementById('fileInput').click()">
                 <div id="uploadPlaceholder">
-                    <div class="upload-icon">📷</div>
-                    <div class="upload-title">Tap to choose an image</div>
-                    <div class="upload-sub">PNG, JPG · Clear subject, front-facing works best</div>
+                    <div class="upload-icon-wrapper">📷</div>
+                    <div class="upload-title">Tap to upload a photo</div>
+                    <div class="upload-sub">PNG, JPG · Clean lighting & centered subject work best</div>
                 </div>
                 <img id="preview-img" alt="Preview" />
                 <input type="file" id="fileInput" accept="image/*" onchange="handleFile(event)" />
@@ -272,8 +372,8 @@
                 id="viewer"
                 camera-controls
                 auto-rotate
-                shadow-intensity="1.2"
-                exposure="1.1"
+                shadow-intensity="1.5"
+                exposure="1.2"
                 environment-image="https://modelviewer.dev/shared-assets/environments/neutral.hdr">
             </model-viewer>
 
@@ -281,8 +381,9 @@
                 <button class="btn" onclick="downloadModel()">⬇ Download GLB</button>
                 <button class="btn btn-outline" onclick="saveToGallery()">★ Save</button>
             </div>
+            
             <p class="quality-note" id="qualityNote" style="display:none;">
-                Tip: Use sharp, well-lit photos with a single clear subject for best results.
+                💡 Tip: Use high-contrast front-facing photos for immaculate details.
             </p>
         </div>
 
@@ -293,8 +394,8 @@
         <div class="gallery" id="gallery"></div>
 
         <p class="tip">
-            Gallery keeps a preview on this device.<br>
-            The 3D file stays on the GPU server so downloads work inside Telegram.
+            Gallery previews are stored securely on your device.<br>
+            Models remain accessible instantly via high-speed GPU servers.
         </p>
     </div>
 
@@ -369,26 +470,41 @@
         }
 
         async function callGenerate(url) {
-            const response = await fetch(url, {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({
-                    image: selectedBase64,
-                    texture_resolution: 2048,
-                    remesh: "triangle"
-                })
-            });
-            const raw = await response.text();
-            let data = {};
-            try { data = raw ? JSON.parse(raw) : {}; }
-            catch { throw new Error("Server returned a login page instead of the 3D model"); }
-            if (!response.ok) {
-                throw new Error(data.detail || data.error || ("HTTP " + response.status));
+            const controller = new AbortController();
+            const timeoutId = setTimeout(() => controller.abort(), 180000);
+
+            try {
+                const response = await fetch(url, {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({
+                        image: selectedBase64,
+                        texture_resolution: 2048,
+                        remesh: "triangle"
+                    }),
+                    signal: controller.signal
+                });
+                clearTimeout(timeoutId);
+
+                const raw = await response.text();
+                let data = {};
+                try { data = raw ? JSON.parse(raw) : {}; }
+                catch { throw new Error("Server response format was invalid"); }
+                
+                if (!response.ok) {
+                    throw new Error(data.detail || data.error || ("HTTP " + response.status));
+                }
+                if (data.detail || (data.error && !data.model && !data.asset_id)) {
+                    throw new Error(data.detail || data.error);
+                }
+                return data;
+            } catch (err) {
+                clearTimeout(timeoutId);
+                if (err.name === 'AbortError') {
+                    throw new Error("Generation timed out. Please try again.");
+                }
+                throw err;
             }
-            if (data.detail || (data.error && !data.model && !data.asset_id)) {
-                throw new Error(data.detail || data.error);
-            }
-            return data;
         }
 
         function modelFromBase64(b64) {
@@ -409,7 +525,7 @@
             actions.style.display = "none";
             viewer.style.display = "none";
             document.getElementById("qualityNote").style.display = "none";
-            setStatus('<span class="spinner"></span> Generating on GPU… first run may take ~1 min');
+            setStatus('<span class="spinner"></span> Synthesizing on GPU… first run may take ~1 min');
 
             try {
                 let data;
@@ -419,8 +535,8 @@
                     try {
                         data = await callGenerate(PROXY_URL);
                     } catch (proxyErr) {
-                        console.warn("Proxy failed, trying direct Modal:", proxyErr);
-                        setStatus('<span class="spinner"></span> Retrying via GPU server…');
+                        console.warn("Proxy failed or timed out, trying direct Modal URL:", proxyErr);
+                        setStatus('<span class="spinner"></span> Connecting to high-performance GPU node…');
                         data = await callGenerate(MODAL_BASE);
                     }
                 }
@@ -430,7 +546,7 @@
                     currentModelUrl = URL.createObjectURL(currentModelBlob);
                     currentAssetId = data.asset_id || Date.now().toString();
                 } else if (data.asset_id) {
-                    setStatus('<span class="spinner"></span> Fetching 3D model…');
+                    setStatus('<span class="spinner"></span> Fetching generated 3D asset…');
                     const glbResponse = await fetch(MODAL_BASE + "/download/" + data.asset_id);
                     if (!glbResponse.ok) throw new Error("Could not download the GLB file");
                     currentModelBlob = await glbResponse.blob();
@@ -444,285 +560,5 @@
                 viewer.style.display = "block";
                 actions.style.display = "flex";
                 document.getElementById("qualityNote").style.display = "block";
-                setStatus("3D model ready — rotate, download or save", "success");
-                if (Telegram.HapticFeedback) Telegram.HapticFeedback.notificationOccurred("success");
-
-                // Auto-save to gallery so user never loses the model
-                autoSaveToGallery();
-
-            } catch (error) {
-                console.error(error);
-                const msg = error.message || "Connection error";
-                if (msg.includes("Failed to fetch") || msg.includes("NetworkError")) {
-                    setStatus("Failed: Network error. Check connection and try again.", "error");
-                } else {
-                    setStatus("Failed: " + msg, "error");
-                }
-                if (Telegram.HapticFeedback) Telegram.HapticFeedback.notificationOccurred("error");
-            } finally {
-                btn.disabled = false;
-            }
-        }
-
-        async function downloadModel() {
-            if (!currentModelBlob && !currentAssetId) return;
-
-            const btnRow = document.getElementById("actionButtons");
-            const buttons = btnRow ? btnRow.querySelectorAll("button") : [];
-            buttons.forEach((b) => { b.disabled = true; });
-
-            try {
-                setStatus("Preparing the .glb file…");
-                const httpsUrl = await ensurePublicGlb();
-                const filename = glbFilename(currentAssetId);
-                if (!httpsUrl) {
-                    setStatus("Could not prepare a .glb link. Generate the model again.", "error");
-                    return;
-                }
-
-                const tg = window.Telegram && window.Telegram.WebApp;
-                const nativeOk = tg && typeof tg.downloadFile === "function" &&
-                    (!tg.isVersionAtLeast || tg.isVersionAtLeast("8.0"));
-
-                if (nativeOk) {
-                    setStatus("Allow the Telegram popup to save " + filename);
-                    try {
-                        tg.downloadFile({ url: httpsUrl, file_name: filename }, function (accepted) {
-                            if (accepted) {
-                                setStatus("Saving " + filename + " — check your Downloads folder", "success");
-                                if (tg.HapticFeedback) tg.HapticFeedback.notificationOccurred("success");
-                            } else {
-                                setStatus("Download cancelled. Tap Download GLB and tap Allow.", "error");
-                            }
-                        });
-                        return;
-                    } catch (e) {
-                        const reason = (e && e.message) || String(e || "");
-                        if (reason.indexOf("PopupOpened") !== -1) {
-                            setStatus("Allow the download popup that's already open.");
-                            return;
-                        }
-                        console.warn("Telegram.downloadFile failed", e);
-                    }
-                }
-
-                if (await shareGlbFile(filename)) {
-                    setStatus("Share sheet opened — choose Save to keep the .glb", "success");
-                    return;
-                }
-
-                const a = document.createElement("a");
-                a.href = httpsUrl;
-                a.download = filename;
-                a.target = "_blank";
-                a.rel = "noopener";
-                document.body.appendChild(a);
-                a.click();
-                a.remove();
-                setStatus("Opened " + filename + ". If nothing saved, update Telegram and try again.", "success");
-            } catch (error) {
-                console.error(error);
-                if (error && error.name === "AbortError") {
-                    setStatus("Download cancelled.", "error");
-                } else {
-                    setStatus("Could not save the .glb. " + (error.message || "Try again."), "error");
-                }
-            } finally {
-                buttons.forEach((b) => { b.disabled = false; });
-            }
-        }
-
-        async function ensurePublicGlb() {
-            const existing = publicGlbUrl(currentAssetId);
-            if (existing) {
-                try {
-                    const probe = await fetch(existing, { method: "HEAD" });
-                    if (probe.ok || probe.status === 206) return existing;
-                    if (probe.status !== 404) return existing;
-                } catch (e) {
-                    // Web view blocked the probe. Telegram itself can still fetch the https link.
-                    return existing;
-                }
-            }
-            if (!currentModelBlob) return null;
-            const response = await fetch(MODAL_BASE + "/store", {
-                method: "POST",
-                headers: { "Content-Type": "model/gltf-binary" },
-                body: currentModelBlob
-            });
-            const data = await response.json().catch(() => ({}));
-            if (!response.ok || !data.asset_id) {
-                throw new Error(data.detail || data.error || "Could not publish the .glb");
-            }
-            currentAssetId = data.asset_id;
-            return publicGlbUrl(currentAssetId);
-        }
-
-        async function shareGlbFile(filename) {
-            if (!currentModelBlob || !navigator.share || !navigator.canShare) return false;
-            const file = new File([currentModelBlob], filename, { type: "model/gltf-binary" });
-            if (!navigator.canShare({ files: [file] })) return false;
-            await navigator.share({ files: [file], title: filename });
-            return true;
-        }
-
-        function getGallery() {
-            try { return JSON.parse(localStorage.getItem("form3d_gallery") || "[]"); }
-            catch { return []; }
-        }
-
-        function thumbFromPreview(dataUrl) {
-            return new Promise((resolve) => {
-                const img = new Image();
-                img.onload = () => {
-                    const side = 320;
-                    const canvas = document.createElement("canvas");
-                    const scale = Math.min(side / img.width, side / img.height, 1);
-                    canvas.width = Math.max(1, Math.round(img.width * scale));
-                    canvas.height = Math.max(1, Math.round(img.height * scale));
-                    canvas.getContext("2d").drawImage(img, 0, 0, canvas.width, canvas.height);
-                    resolve(canvas.toDataURL("image/jpeg", 0.72));
-                };
-                img.onerror = () => resolve(dataUrl);
-                img.src = dataUrl;
-            });
-        }
-
-        async function rememberInGallery(showToast) {
-            if (!currentPreview) return;
-            const id = currentAssetId || Date.now().toString();
-            currentAssetId = id;
-            const preview = await thumbFromPreview(currentPreview);
-            const gallery = getGallery().filter((g) => g.id !== id);
-            gallery.unshift({
-                id,
-                preview,
-                download: publicGlbUrl(id),
-                created: new Date().toISOString()
-            });
-            if (gallery.length > 24) gallery.length = 24;
-            try {
-                localStorage.setItem("form3d_gallery", JSON.stringify(gallery));
-            } catch (err) {
-                setStatus("Gallery is full on this device. The model is still ready to download.", "error");
-                return;
-            }
-            renderGallery();
-            if (showToast) {
-                setStatus("Saved to your Gallery", "success");
-                if (Telegram.HapticFeedback) Telegram.HapticFeedback.notificationOccurred("success");
-            }
-        }
-
-        function autoSaveToGallery() {
-            rememberInGallery(false);
-        }
-
-        function saveToGallery() {
-            if (!currentPreview) return;
-            rememberInGallery(true);
-        }
-
-        function deleteFromGallery(index, event) {
-            event.stopPropagation();
-            const gallery = getGallery();
-            gallery.splice(index, 1);
-            localStorage.setItem("form3d_gallery", JSON.stringify(gallery));
-            renderGallery();
-            setStatus("Removed from Gallery");
-        }
-
-        function renderGallery() {
-            const gallery = getGallery();
-            const container = document.getElementById("gallery");
-            const countEl = document.getElementById("galleryCount");
-            countEl.innerText = gallery.length ? gallery.length + (gallery.length === 1 ? " model" : " models") : "";
-
-            if (gallery.length === 0) {
-                container.innerHTML = `
-                    <div class="empty-state">
-                        <strong>No models yet</strong>
-                        Generate a 3D model — it auto-saves here.<br>
-                        Everything stays only on this phone.
-                    </div>`;
-                return;
-            }
-
-            container.innerHTML = gallery.map((item, idx) => `
-                <div class="gallery-item" onclick="loadFromGallery(${idx})">
-                    <img src="${item.preview}" alt="Model preview" />
-                    <div class="meta">
-                        <span class="date">${new Date(item.created).toLocaleDateString()}</span>
-                        <button class="delete-btn" onclick="deleteFromGallery(${idx}, event)" title="Delete">✕</button>
-                    </div>
-                </div>
-            `).join("");
-        }
-
-        async function loadFromGallery(index) {
-            const gallery = getGallery();
-            const item = gallery[index];
-            if (!item) return;
-
-            const viewer = document.getElementById("viewer");
-            const actions = document.getElementById("actionButtons");
-            currentAssetId = item.id;
-            currentPreview = item.preview;
-
-            const previewImg = document.getElementById("preview-img");
-            previewImg.src = item.preview;
-            previewImg.style.display = "block";
-            document.getElementById("uploadPlaceholder").style.display = "none";
-            document.getElementById("uploadZone").classList.add("has-image");
-            window.scrollTo({ top: 0, behavior: "smooth" });
-
-            if (item.model) {
-                const byteString = atob(item.model.split(",")[1] || item.model);
-                const ia = new Uint8Array(byteString.length);
-                for (let i = 0; i < byteString.length; i++) ia[i] = byteString.charCodeAt(i);
-                currentModelBlob = new Blob([ia], { type: "model/gltf-binary" });
-                if (currentModelUrl) URL.revokeObjectURL(currentModelUrl);
-                currentModelUrl = URL.createObjectURL(currentModelBlob);
-                viewer.src = currentModelUrl;
-                viewer.style.display = "block";
-                actions.style.display = "flex";
-                document.getElementById("qualityNote").style.display = "block";
-                setStatus("Loaded from Gallery", "success");
-                return;
-            }
-
-            const url = item.download || publicGlbUrl(item.id);
-            if (!url) {
-                setStatus("This saved item has no 3D file. Generate it again.", "error");
-                return;
-            }
-            setStatus('<span class="spinner"></span> Loading saved model…');
-            try {
-                const response = await fetch(url);
-                if (!response.ok) throw new Error("Model expired on the server");
-                currentModelBlob = await response.blob();
-                if (currentModelUrl) URL.revokeObjectURL(currentModelUrl);
-                currentModelUrl = URL.createObjectURL(currentModelBlob);
-                viewer.src = currentModelUrl;
-                viewer.style.display = "block";
-                actions.style.display = "flex";
-                document.getElementById("qualityNote").style.display = "block";
-                setStatus("Loaded from Gallery", "success");
-            } catch (error) {
-                setStatus(error.message || "Could not reload this model", "error");
-            }
-        }
-
-        (function migrateGallery() {
-            try {
-                const old = localStorage.getItem("sf3d_gallery");
-                if (old && !localStorage.getItem("form3d_gallery")) {
-                    localStorage.setItem("form3d_gallery", old);
-                }
-            } catch (_) {}
-        })();
-
-        renderGallery();
-    </script>
-</body>
-</html>
+                setStatus("3D Model successfully generated!", "success");
+                if (Telegram.HapticFeedback)
