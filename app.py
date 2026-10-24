@@ -22,7 +22,8 @@ GPU_DEVICE = "cuda:0"
 
 DEFAULT_TEXTURE_RESOLUTION = 2048
 MAX_IMAGE_PIXELS = 40_000_000
-FOREGROUND_SCALE = 0.92
+# Slightly more margin so heads/feet are less clipped in SF3D
+FOREGROUND_SCALE = 0.85
 REMESH_MODE = "none"
 
 UUID_RE = re.compile(
@@ -73,23 +74,52 @@ def decode_image(data: Any):
     return result
 
 
+def _get_rembg_session():
+    """Prefer a stronger cutout model when available."""
+    from rembg import new_session
+
+    session = getattr(_get_rembg_session, "_session", None)
+    if session is not None:
+        return session
+
+    # isnet-general-use usually gives cleaner edges than u2net
+    for model_name in ("isnet-general-use", "u2net"):
+        try:
+            session = new_session(model_name)
+            _get_rembg_session._session = session
+            print(f"rembg session loaded: {model_name}")
+            return session
+        except Exception as exc:
+            print(f"rembg model {model_name} unavailable: {exc}")
+
+    session = new_session("u2net")
+    _get_rembg_session._session = session
+    return session
+
+
+def _sharpen_alpha(rgba, threshold=24):
+    """Harder alpha edges reduce blocky fringe artifacts in SF3D."""
+    from PIL import Image
+    r, g, b, a = rgba.split()
+    # Binary-ish mask: kill soft fringe pixels
+    a = a.point(lambda p: 255 if p >= threshold else 0)
+    return Image.merge("RGBA", (r, g, b, a))
+
+
 def remove_background_and_center(image):
     from PIL import Image
-    from rembg import new_session, remove
+    from rembg import remove
 
-    session = getattr(remove_background_and_center, "_session", None)
-    if session is None:
-        session = new_session("u2net")
-        remove_background_and_center._session = session
-
+    session = _get_rembg_session()
     rgba = remove(image, session=session).convert("RGBA")
+    rgba = _sharpen_alpha(rgba)
+
     alpha = rgba.getchannel("A")
     bbox = alpha.getbbox()
     if bbox is None:
         raise ValueError("No foreground subject was detected.")
 
     subject = rgba.crop(bbox)
-    # Larger canvas + sharper resize for more defined shapes
     canvas_size = 1280
     canvas = Image.new("RGBA", (canvas_size, canvas_size), (0, 0, 0, 0))
     max_dim = int(canvas_size * FOREGROUND_SCALE)
@@ -202,7 +232,6 @@ class SF3DModel:
             sys.path.append("/app/stable-fast-3d")
 
         from sf3d.system import SF3D
-        from rembg import new_session
 
         self.model = SF3D.from_pretrained(
             MODEL_ID,
@@ -212,7 +241,8 @@ class SF3DModel:
         self.model.eval()
         self.model.to(self.device)
 
-        remove_background_and_center._session = new_session("u2net")
+        # Warm rembg session inside the snapshot
+        _get_rembg_session()
         models_volume.commit()
 
         torch.cuda.empty_cache()
