@@ -293,16 +293,23 @@
         <div class="gallery" id="gallery"></div>
 
         <p class="tip">
-            All models are stored only on your device.<br>
-            Nothing is uploaded to any cloud gallery.
+            Gallery keeps a preview on this device.<br>
+            The 3D file stays on the GPU server so downloads work inside Telegram.
         </p>
     </div>
 
     <script>
-        const Telegram = window.Telegram.WebApp;
-        Telegram.ready();
-        Telegram.expand();
-        if (Telegram.setHeaderColor) Telegram.setHeaderColor("secondary_bg_color");
+        const tgApp = (window.Telegram && window.Telegram.WebApp) ? window.Telegram.WebApp : null;
+        const Telegram = tgApp || {
+            ready() {},
+            expand() {},
+            HapticFeedback: null,
+        };
+        if (tgApp) {
+            tgApp.ready();
+            tgApp.expand();
+            if (tgApp.setHeaderColor) tgApp.setHeaderColor("secondary_bg_color");
+        }
 
         const PROXY_URL = "/api/generate-3d";
         const MODAL_BASE = "https://berarhydam050--sf3d-backend-generate.modal.run";
@@ -357,6 +364,10 @@
             reader.readAsDataURL(file);
         }
 
+        function onGitHubPages() {
+            return location.hostname.endsWith("github.io");
+        }
+
         async function callGenerate(url) {
             const response = await fetch(url, {
                 method: "POST",
@@ -364,14 +375,17 @@
                 body: JSON.stringify({
                     image: selectedBase64,
                     texture_resolution: 2048,
-                    remesh: "triangle"   // cleaner mesh than "none"
+                    remesh: "triangle"
                 })
             });
-            const data = await response.json().catch(() => ({}));
+            const raw = await response.text();
+            let data = {};
+            try { data = raw ? JSON.parse(raw) : {}; }
+            catch { throw new Error("Server returned a login page instead of the 3D model"); }
             if (!response.ok) {
                 throw new Error(data.detail || data.error || ("HTTP " + response.status));
             }
-            if (data.detail || (data.error && !data.model)) {
+            if (data.detail || (data.error && !data.model && !data.asset_id)) {
                 throw new Error(data.detail || data.error);
             }
             return data;
@@ -399,12 +413,16 @@
 
             try {
                 let data;
-                try {
-                    data = await callGenerate(PROXY_URL);
-                } catch (proxyErr) {
-                    console.warn("Proxy failed, trying direct Modal:", proxyErr);
-                    setStatus('<span class="spinner"></span> Retrying via GPU server…');
+                if (onGitHubPages()) {
                     data = await callGenerate(MODAL_BASE);
+                } else {
+                    try {
+                        data = await callGenerate(PROXY_URL);
+                    } catch (proxyErr) {
+                        console.warn("Proxy failed, trying direct Modal:", proxyErr);
+                        setStatus('<span class="spinner"></span> Retrying via GPU server…');
+                        data = await callGenerate(MODAL_BASE);
+                    }
                 }
 
                 if (data.model) {
@@ -553,51 +571,56 @@
             catch { return []; }
         }
 
-        function autoSaveToGallery() {
-            if (!currentModelBlob || !currentPreview) return;
-            const reader = new FileReader();
-            reader.onload = () => {
-                const gallery = getGallery();
-                // Avoid duplicates of same asset
-                if (gallery.some(g => g.id === currentAssetId)) return;
-                gallery.unshift({
-                    id: currentAssetId || Date.now().toString(),
-                    preview: currentPreview,
-                    model: reader.result,
-                    created: new Date().toISOString()
-                });
-                if (gallery.length > 24) gallery.length = 24;
+        function thumbFromPreview(dataUrl) {
+            return new Promise((resolve) => {
+                const img = new Image();
+                img.onload = () => {
+                    const side = 320;
+                    const canvas = document.createElement("canvas");
+                    const scale = Math.min(side / img.width, side / img.height, 1);
+                    canvas.width = Math.max(1, Math.round(img.width * scale));
+                    canvas.height = Math.max(1, Math.round(img.height * scale));
+                    canvas.getContext("2d").drawImage(img, 0, 0, canvas.width, canvas.height);
+                    resolve(canvas.toDataURL("image/jpeg", 0.72));
+                };
+                img.onerror = () => resolve(dataUrl);
+                img.src = dataUrl;
+            });
+        }
+
+        async function rememberInGallery(showToast) {
+            if (!currentPreview) return;
+            const id = currentAssetId || Date.now().toString();
+            currentAssetId = id;
+            const preview = await thumbFromPreview(currentPreview);
+            const gallery = getGallery().filter((g) => g.id !== id);
+            gallery.unshift({
+                id,
+                preview,
+                download: publicGlbUrl(id),
+                created: new Date().toISOString()
+            });
+            if (gallery.length > 24) gallery.length = 24;
+            try {
                 localStorage.setItem("form3d_gallery", JSON.stringify(gallery));
-                renderGallery();
-            };
-            reader.readAsDataURL(currentModelBlob);
+            } catch (err) {
+                setStatus("Gallery is full on this device. The model is still ready to download.", "error");
+                return;
+            }
+            renderGallery();
+            if (showToast) {
+                setStatus("Saved to your Gallery", "success");
+                if (Telegram.HapticFeedback) Telegram.HapticFeedback.notificationOccurred("success");
+            }
+        }
+
+        function autoSaveToGallery() {
+            rememberInGallery(false);
         }
 
         function saveToGallery() {
-            if (!currentModelUrl || !currentPreview) return;
-            const doSave = (blob) => {
-                const reader = new FileReader();
-                reader.onload = () => {
-                    const gallery = getGallery();
-                    gallery.unshift({
-                        id: currentAssetId || Date.now().toString(),
-                        preview: currentPreview,
-                        model: reader.result,
-                        created: new Date().toISOString()
-                    });
-                    if (gallery.length > 24) gallery.length = 24;
-                    localStorage.setItem("form3d_gallery", JSON.stringify(gallery));
-                    renderGallery();
-                    setStatus("Saved to your Gallery (device only)", "success");
-                    if (Telegram.HapticFeedback) Telegram.HapticFeedback.notificationOccurred("success");
-                };
-                reader.readAsDataURL(blob);
-            };
-            if (currentModelBlob) {
-                doSave(currentModelBlob);
-            } else {
-                fetch(currentModelUrl).then(r => r.blob()).then(doSave);
-            }
+            if (!currentPreview) return;
+            rememberInGallery(true);
         }
 
         function deleteFromGallery(index, event) {
@@ -636,39 +659,58 @@
             `).join("");
         }
 
-        function loadFromGallery(index) {
+        async function loadFromGallery(index) {
             const gallery = getGallery();
             const item = gallery[index];
             if (!item) return;
 
             const viewer = document.getElementById("viewer");
             const actions = document.getElementById("actionButtons");
-
-            const byteString = atob(item.model.split(",")[1] || item.model);
-            const ab = new ArrayBuffer(byteString.length);
-            const ia = new Uint8Array(ab);
-            for (let i = 0; i < byteString.length; i++) ia[i] = byteString.charCodeAt(i);
-            const blob = new Blob([ab], { type: "model/gltf-binary" });
-
-            if (currentModelUrl) URL.revokeObjectURL(currentModelUrl);
-            currentModelBlob = blob;
-            currentModelUrl = URL.createObjectURL(blob);
             currentAssetId = item.id;
             currentPreview = item.preview;
-
-            viewer.src = currentModelUrl;
-            viewer.style.display = "block";
-            actions.style.display = "flex";
-            document.getElementById("qualityNote").style.display = "block";
 
             const previewImg = document.getElementById("preview-img");
             previewImg.src = item.preview;
             previewImg.style.display = "block";
             document.getElementById("uploadPlaceholder").style.display = "none";
             document.getElementById("uploadZone").classList.add("has-image");
-
-            setStatus("Loaded from Gallery", "success");
             window.scrollTo({ top: 0, behavior: "smooth" });
+
+            if (item.model) {
+                const byteString = atob(item.model.split(",")[1] || item.model);
+                const ia = new Uint8Array(byteString.length);
+                for (let i = 0; i < byteString.length; i++) ia[i] = byteString.charCodeAt(i);
+                currentModelBlob = new Blob([ia], { type: "model/gltf-binary" });
+                if (currentModelUrl) URL.revokeObjectURL(currentModelUrl);
+                currentModelUrl = URL.createObjectURL(currentModelBlob);
+                viewer.src = currentModelUrl;
+                viewer.style.display = "block";
+                actions.style.display = "flex";
+                document.getElementById("qualityNote").style.display = "block";
+                setStatus("Loaded from Gallery", "success");
+                return;
+            }
+
+            const url = item.download || publicGlbUrl(item.id);
+            if (!url) {
+                setStatus("This saved item has no 3D file. Generate it again.", "error");
+                return;
+            }
+            setStatus('<span class="spinner"></span> Loading saved model…');
+            try {
+                const response = await fetch(url);
+                if (!response.ok) throw new Error("Model expired on the server");
+                currentModelBlob = await response.blob();
+                if (currentModelUrl) URL.revokeObjectURL(currentModelUrl);
+                currentModelUrl = URL.createObjectURL(currentModelBlob);
+                viewer.src = currentModelUrl;
+                viewer.style.display = "block";
+                actions.style.display = "flex";
+                document.getElementById("qualityNote").style.display = "block";
+                setStatus("Loaded from Gallery", "success");
+            } catch (error) {
+                setStatus(error.message || "Could not reload this model", "error");
+            }
         }
 
         (function migrateGallery() {

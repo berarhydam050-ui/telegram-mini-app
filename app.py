@@ -317,12 +317,8 @@ def generate():
     web_app = FastAPI(title="SF3D Image-to-3D API")
     web_app.add_middleware(
         CORSMiddleware,
-        allow_origins=[
-            "https://web.telegram.org",
-            "https://telegram-mini-app-hobbies5.vercel.app",
-            "https://berarhydam050-ui.github.io",
-        ],
-        allow_origin_regex=r"https://.*\.vercel\.app",
+        allow_origins=["*"],
+        allow_origin_regex=None,
         allow_credentials=False,
         allow_methods=["POST", "GET", "HEAD", "OPTIONS"],
         allow_headers=["*"],
@@ -361,8 +357,6 @@ def generate():
             media_type="model/gltf-binary",
             filename=filename,
             headers={
-                # Telegram Web only saves the file when this origin is explicit.
-                "Access-Control-Allow-Origin": "https://web.telegram.org",
                 "Cache-Control": "private, max-age=86400",
                 "X-Content-Type-Options": "nosniff",
             },
