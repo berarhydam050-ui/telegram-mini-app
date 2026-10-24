@@ -37,9 +37,9 @@ DEFAULT_TEXTURE_RESOLUTION = 2048
 
 MAX_IMAGE_PIXELS = 40_000_000
 
-FOREGROUND_SCALE = 0.85
+FOREGROUND_SCALE = 0.90
 
-REMESH_MODE = "none"
+REMESH_MODE = "triangle"
 
 
 app = modal.App(APP_NAME)
@@ -279,7 +279,7 @@ class SF3DModel:
                 "format": "glb",
                 "mime_type": "model/gltf-binary",
                 "asset_id": asset_id,
-                "model": model_b64,  # base64 GLB – main fix
+                "model": model_b64,
                 "download_url": f"/download/{asset_id}",
                 "texture_resolution": texture_resolution,
                 "remesh": remesh_option,
