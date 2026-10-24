@@ -273,7 +273,7 @@
 
             <div class="btn-row" id="actionButtons" style="display:none;">
                 <button class="btn" onclick="downloadModel()">⬇ Download GLB</button>
-                <button class=" bel" onclick="saveToGallery()">★ Save</button>
+                <button class="btn btn-outline" onclick="saveToGallery()">★ Save</button>
             </div>
         </div>
 
@@ -314,7 +314,6 @@
         function handleFile(event) {
             const file = event.target.files[0];
             if (!file) return;
-            // Soft size warning for very large photos
             if (file.size > 12 * 1024 * 1024) {
                 setStatus("Large image — may take longer or fail. Prefer under 8 MB.", "error");
             }
@@ -378,7 +377,6 @@
 
             try {
                 let data;
-                // 1) Try same-origin Vercel proxy first (best for Telegram)
                 try {
                     data = await callGenerate(PROXY_URL);
                 } catch (proxyErr) {
@@ -411,7 +409,6 @@
             } catch (error) {
                 console.error(error);
                 const msg = error.message || "Connection error";
-                // Friendlier messages for common cases
                 if (msg.includes("Failed to fetch") || msg.includes("NetworkError")) {
                     setStatus("Failed: Network error. Check connection and try again.", "error");
                 } else {
