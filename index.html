@@ -28,8 +28,6 @@
             padding: 0 0 40px;
             overflow-x: hidden;
         }
-
-        /* Header */
         .header {
             padding: 20px 20px 12px;
             text-align: center;
@@ -56,14 +54,11 @@
             color: var(--hint);
             margin-top: 4px;
         }
-
         .container {
             max-width: 400px;
             margin: 0 auto;
             padding: 0 16px;
         }
-
-        /* Main Card */
         .card {
             background: var(--card);
             border: 1px solid var(--border);
@@ -72,8 +67,6 @@
             margin-bottom: 20px;
             box-shadow: 0 8px 32px rgba(0,0,0,0.25);
         }
-
-        /* Upload Zone */
         .upload-zone {
             border: 1.5px dashed rgba(96,165,250,0.45);
             border-radius: 16px;
@@ -95,20 +88,9 @@
             padding: 12px;
         }
         .upload-zone:active { transform: scale(0.985); }
-        .upload-icon {
-            font-size: 2rem;
-            margin-bottom: 8px;
-            opacity: 0.7;
-        }
-        .upload-title {
-            font-size: 0.95rem;
-            font-weight: 600;
-            margin-bottom: 4px;
-        }
-        .upload-sub {
-            font-size: 0.78rem;
-            color: var(--hint);
-        }
+        .upload-icon { font-size: 2rem; margin-bottom: 8px; opacity: 0.7; }
+        .upload-title { font-size: 0.95rem; font-weight: 600; margin-bottom: 4px; }
+        .upload-sub { font-size: 0.78rem; color: var(--hint); }
         #preview-img {
             max-width: 100%;
             max-height: 220px;
@@ -117,8 +99,6 @@
             object-fit: contain;
         }
         input[type="file"] { display: none; }
-
-        /* Buttons */
         .btn {
             display: flex;
             align-items: center;
@@ -137,11 +117,7 @@
             transition: all 0.15s ease;
             box-shadow: 0 4px 16px rgba(37,99,235,0.35);
         }
-        .btn:disabled {
-            opacity: 0.4;
-            cursor: not-allowed;
-            box-shadow: none;
-        }
+        .btn:disabled { opacity: 0.4; cursor: not-allowed; box-shadow: none; }
         .btn:active:not(:disabled) { transform: scale(0.97); }
         .btn-outline {
             background: transparent;
@@ -149,17 +125,9 @@
             color: var(--accent);
             box-shadow: none;
         }
-        .btn-outline:active:not(:disabled) {
-            background: rgba(96,165,250,0.1);
-        }
-        .btn-row {
-            display: flex;
-            gap: 10px;
-            margin-top: 12px;
-        }
+        .btn-outline:active:not(:disabled) { background: rgba(96,165,250,0.1); }
+        .btn-row { display: flex; gap: 10px; margin-top: 12px; }
         .btn-row .btn { margin-top: 0; flex: 1; padding: 13px 8px; font-size: 0.88rem; }
-
-        /* Status */
         #status {
             margin-top: 14px;
             font-size: 0.86rem;
@@ -170,8 +138,6 @@
         }
         #status.success { color: var(--success); }
         #status.error { color: var(--danger); }
-
-        /* Model Viewer */
         model-viewer {
             width: 100%;
             height: 300px;
@@ -181,8 +147,6 @@
             display: none;
             border: 1px solid var(--border);
         }
-
-        /* Gallery Section */
         .section-header {
             display: flex;
             justify-content: space-between;
@@ -190,15 +154,8 @@
             margin: 28px 0 14px;
             padding: 0 2px;
         }
-        .section-header h2 {
-            font-size: 1.05rem;
-            font-weight: 650;
-        }
-        .section-header span {
-            font-size: 0.8rem;
-            color: var(--hint);
-        }
-
+        .section-header h2 { font-size: 1.05rem; font-weight: 650; }
+        .section-header span { font-size: 0.8rem; color: var(--hint); }
         .gallery {
             display: grid;
             grid-template-columns: 1fr 1fr;
@@ -227,10 +184,7 @@
             justify-content: space-between;
             align-items: center;
         }
-        .gallery-item .date {
-            font-size: 0.72rem;
-            color: var(--hint);
-        }
+        .gallery-item .date { font-size: 0.72rem; color: var(--hint); }
         .gallery-item .delete-btn {
             background: rgba(239,68,68,0.15);
             color: var(--danger);
@@ -244,7 +198,6 @@
             align-items: center;
             justify-content: center;
         }
-
         .empty-state {
             grid-column: 1 / -1;
             text-align: center;
@@ -262,8 +215,6 @@
             margin-bottom: 6px;
             font-size: 0.95rem;
         }
-
-        /* Spinner */
         .spinner {
             display: inline-block;
             width: 16px;
@@ -276,8 +227,6 @@
             margin-right: 8px;
         }
         @keyframes spin { to { transform: rotate(360deg); } }
-
-        /* Tip bar */
         .tip {
             font-size: 0.75rem;
             color: var(--hint);
@@ -324,7 +273,7 @@
 
             <div class="btn-row" id="actionButtons" style="display:none;">
                 <button class="btn" onclick="downloadModel()">⬇ Download GLB</button>
-                <button class="btn btn-outline" onclick="saveToGallery()">★ Save</button>
+                <button class=" bel" onclick="saveToGallery()">★ Save</button>
             </div>
         </div>
 
@@ -346,6 +295,9 @@
         Telegram.expand();
         if (Telegram.setHeaderColor) Telegram.setHeaderColor("secondary_bg_color");
 
+        // Prefer same-origin Vercel proxy (more reliable inside Telegram WebView)
+        // Fall back to direct Modal if proxy fails
+        const PROXY_URL = "/api/generate-3d";
         const MODAL_BASE = "https://berarhydam050--sf3d-backend-generate.modal.run";
 
         let selectedBase64 = "";
@@ -362,6 +314,10 @@
         function handleFile(event) {
             const file = event.target.files[0];
             if (!file) return;
+            // Soft size warning for very large photos
+            if (file.size > 12 * 1024 * 1024) {
+                setStatus("Large image — may take longer or fail. Prefer under 8 MB.", "error");
+            }
             const reader = new FileReader();
             reader.onload = function(e) {
                 selectedBase64 = e.target.result;
@@ -374,11 +330,40 @@
                 document.getElementById("generateBtn").disabled = false;
                 document.getElementById("viewer").style.display = "none";
                 document.getElementById("actionButtons").style.display = "none";
-                setStatus("");
+                if (file.size <= 12 * 1024 * 1024) setStatus("");
                 currentModelUrl = null;
                 currentAssetId = null;
             };
             reader.readAsDataURL(file);
+        }
+
+        async function callGenerate(url) {
+            const response = await fetch(url, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                    image: selectedBase64,
+                    texture_resolution: 2048,
+                    remesh: "none"
+                })
+            });
+            const data = await response.json().catch(() => ({}));
+            if (!response.ok) {
+                throw new Error(data.detail || data.error || ("HTTP " + response.status));
+            }
+            if (data.detail || (data.error && !data.model)) {
+                throw new Error(data.detail || data.error);
+            }
+            return data;
+        }
+
+        function modelFromBase64(b64) {
+            const byteCharacters = atob(b64);
+            const byteNumbers = new Array(byteCharacters.length);
+            for (let i = 0; i < byteCharacters.length; i++) {
+                byteNumbers[i] = byteCharacters.charCodeAt(i);
+            }
+            return new Blob([new Uint8Array(byteNumbers)], { type: "model/gltf-binary" });
         }
 
         async function generate3D() {
@@ -392,43 +377,21 @@
             setStatus('<span class="spinner"></span> Generating on GPU… first run may take ~1 min');
 
             try {
-                const response = await fetch(MODAL_BASE, {
-                    method: "POST",
-                    headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify({
-                        image: selectedBase64,
-                        texture_resolution: 2048,
-                        remesh: "none"
-                    })
-                });
-
-                if (!response.ok) {
-                    let errMsg = "Generation failed";
-                    try {
-                        const errData = await response.json();
-                        errMsg = errData.detail || errData.error || errMsg;
-                    } catch (_) {}
-                    throw new Error(errMsg);
-                }
-
-                const data = await response.json();
-
-                if (data.detail || data.error) {
-                    throw new Error(data.detail || data.error);
+                let data;
+                // 1) Try same-origin Vercel proxy first (best for Telegram)
+                try {
+                    data = await callGenerate(PROXY_URL);
+                } catch (proxyErr) {
+                    console.warn("Proxy failed, trying direct Modal:", proxyErr);
+                    setStatus('<span class="spinner"></span> Retrying via GPU server…');
+                    data = await callGenerate(MODAL_BASE);
                 }
 
                 if (data.model) {
-                    // Preferred path – base64 GLB returned directly
-                    const byteCharacters = atob(data.model);
-                    const byteNumbers = new Array(byteCharacters.length);
-                    for (let i = 0; i < byteCharacters.length; i++) {
-                        byteNumbers[i] = byteCharacters.charCodeAt(i);
-                    }
-                    const blob = new Blob([new Uint8Array(byteNumbers)], { type: "model/gltf-binary" });
+                    const blob = modelFromBase64(data.model);
                     currentModelUrl = URL.createObjectURL(blob);
                     currentAssetId = data.asset_id || Date.now().toString();
                 } else if (data.asset_id) {
-                    // Fallback – try download endpoint
                     setStatus('<span class="spinner"></span> Fetching 3D model…');
                     const glbResponse = await fetch(MODAL_BASE + "/download/" + data.asset_id);
                     if (!glbResponse.ok) throw new Error("Could not download the GLB file");
@@ -447,7 +410,13 @@
 
             } catch (error) {
                 console.error(error);
-                setStatus("Failed: " + (error.message || "Connection error"), "error");
+                const msg = error.message || "Connection error";
+                // Friendlier messages for common cases
+                if (msg.includes("Failed to fetch") || msg.includes("NetworkError")) {
+                    setStatus("Failed: Network error. Check connection and try again.", "error");
+                } else {
+                    setStatus("Failed: " + msg, "error");
+                }
                 if (Telegram.HapticFeedback) Telegram.HapticFeedback.notificationOccurred("error");
             } finally {
                 btn.disabled = false;
@@ -485,7 +454,6 @@
                             model: reader.result,
                             created: new Date().toISOString()
                         });
-                        // Keep only last 24 models to respect device storage
                         if (gallery.length > 24) gallery.length = 24;
                         localStorage.setItem("form3d_gallery", JSON.stringify(gallery));
                         renderGallery();
@@ -565,7 +533,6 @@
             window.scrollTo({ top: 0, behavior: "smooth" });
         }
 
-        // Migrate old gallery key if present
         (function migrateGallery() {
             try {
                 const old = localStorage.getItem("sf3d_gallery");
