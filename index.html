@@ -140,7 +140,7 @@
         #status.error { color: var(--danger); }
         model-viewer {
             width: 100%;
-            height: 300px;
+            height: 320px;
             background: radial-gradient(ellipse at center, #1a2332 0%, #0a1018 70%);
             border-radius: 16px;
             margin-top: 14px;
@@ -235,6 +235,12 @@
             padding: 0 8px;
             line-height: 1.45;
         }
+        .quality-note {
+            font-size: 0.72rem;
+            color: var(--hint);
+            text-align: center;
+            margin-top: 8px;
+        }
     </style>
 </head>
 <body>
@@ -250,7 +256,7 @@
                 <div id="uploadPlaceholder">
                     <div class="upload-icon">📷</div>
                     <div class="upload-title">Tap to choose an image</div>
-                    <div class="upload-sub">PNG, JPG · Best with clear subjects</div>
+                    <div class="upload-sub">PNG, JPG · Clear subject, front-facing works best</div>
                 </div>
                 <img id="preview-img" alt="Preview" />
                 <input type="file" id="fileInput" accept="image/*" onchange="handleFile(event)" />
@@ -266,8 +272,8 @@
                 id="viewer"
                 camera-controls
                 auto-rotate
-                shadow-intensity="1"
-                exposure="1.15"
+                shadow-intensity="1.2"
+                exposure="1.1"
                 environment-image="https://modelviewer.dev/shared-assets/environments/neutral.hdr">
             </model-viewer>
 
@@ -275,6 +281,9 @@
                 <button class="btn" onclick="downloadModel()">⬇ Download GLB</button>
                 <button class="btn btn-outline" onclick="saveToGallery()">★ Save</button>
             </div>
+            <p class="quality-note" id="qualityNote" style="display:none;">
+                Tip: Use sharp, well-lit photos with a single clear subject for best results.
+            </p>
         </div>
 
         <div class="section-header">
@@ -295,13 +304,12 @@
         Telegram.expand();
         if (Telegram.setHeaderColor) Telegram.setHeaderColor("secondary_bg_color");
 
-        // Prefer same-origin Vercel proxy (more reliable inside Telegram WebView)
-        // Fall back to direct Modal if proxy fails
         const PROXY_URL = "/api/generate-3d";
         const MODAL_BASE = "https://berarhydam050--sf3d-backend-generate.modal.run";
 
         let selectedBase64 = "";
         let currentModelUrl = null;
+        let currentModelBlob = null;
         let currentAssetId = null;
         let currentPreview = null;
 
@@ -315,7 +323,7 @@
             const file = event.target.files[0];
             if (!file) return;
             if (file.size > 12 * 1024 * 1024) {
-                setStatus("Large image — may take longer or fail. Prefer under 8 MB.", "error");
+                setStatus("Large image — prefer under 8 MB for best results.", "error");
             }
             const reader = new FileReader();
             reader.onload = function(e) {
@@ -329,8 +337,10 @@
                 document.getElementById("generateBtn").disabled = false;
                 document.getElementById("viewer").style.display = "none";
                 document.getElementById("actionButtons").style.display = "none";
+                document.getElementById("qualityNote").style.display = "none";
                 if (file.size <= 12 * 1024 * 1024) setStatus("");
                 currentModelUrl = null;
+                currentModelBlob = null;
                 currentAssetId = null;
             };
             reader.readAsDataURL(file);
@@ -343,7 +353,7 @@
                 body: JSON.stringify({
                     image: selectedBase64,
                     texture_resolution: 2048,
-                    remesh: "none"
+                    remesh: "triangle"   // cleaner mesh than "none"
                 })
             });
             const data = await response.json().catch(() => ({}));
@@ -373,6 +383,7 @@
             btn.disabled = true;
             actions.style.display = "none";
             viewer.style.display = "none";
+            document.getElementById("qualityNote").style.display = "none";
             setStatus('<span class="spinner"></span> Generating on GPU… first run may take ~1 min');
 
             try {
@@ -386,15 +397,15 @@
                 }
 
                 if (data.model) {
-                    const blob = modelFromBase64(data.model);
-                    currentModelUrl = URL.createObjectURL(blob);
+                    currentModelBlob = modelFromBase64(data.model);
+                    currentModelUrl = URL.createObjectURL(currentModelBlob);
                     currentAssetId = data.asset_id || Date.now().toString();
                 } else if (data.asset_id) {
                     setStatus('<span class="spinner"></span> Fetching 3D model…');
                     const glbResponse = await fetch(MODAL_BASE + "/download/" + data.asset_id);
                     if (!glbResponse.ok) throw new Error("Could not download the GLB file");
-                    const blob = await glbResponse.blob();
-                    currentModelUrl = URL.createObjectURL(blob);
+                    currentModelBlob = await glbResponse.blob();
+                    currentModelUrl = URL.createObjectURL(currentModelBlob);
                     currentAssetId = data.asset_id;
                 } else {
                     throw new Error("No 3D model returned from server");
@@ -403,8 +414,12 @@
                 viewer.src = currentModelUrl;
                 viewer.style.display = "block";
                 actions.style.display = "flex";
+                document.getElementById("qualityNote").style.display = "block";
                 setStatus("3D model ready — rotate, download or save", "success");
                 if (Telegram.HapticFeedback) Telegram.HapticFeedback.notificationOccurred("success");
+
+                // Auto-save to gallery so user never loses the model
+                autoSaveToGallery();
 
             } catch (error) {
                 console.error(error);
@@ -420,16 +435,58 @@
             }
         }
 
-        function downloadModel() {
-            if (!currentModelUrl) return;
-            const a = document.createElement("a");
-            a.href = currentModelUrl;
-            a.download = "form3d-" + (currentAssetId || Date.now()) + ".glb";
-            document.body.appendChild(a);
-            a.click();
-            document.body.removeChild(a);
-            setStatus("Downloaded to your device", "success");
-            if (Telegram.HapticFeedback) Telegram.HapticFeedback.notificationOccurred("success");
+        async function downloadModel() {
+            if (!currentModelBlob && !currentModelUrl) return;
+
+            const filename = "form3d-" + (currentAssetId || Date.now()) + ".glb";
+
+            // Method 1: Telegram native download (Bot API 7+ / recent clients)
+            if (Telegram.downloadFile && currentModelUrl) {
+                try {
+                    Telegram.downloadFile({
+                        url: currentModelUrl,
+                        file_name: filename
+                    });
+                    setStatus("Download started…", "success");
+                    if (Telegram.HapticFeedback) Telegram.HapticFeedback.notificationOccurred("success");
+                    return;
+                } catch (e) {
+                    console.warn("Telegram.downloadFile failed", e);
+                }
+            }
+
+            // Method 2: Standard anchor download
+            try {
+                const blob = currentModelBlob || await (await fetch(currentModelUrl)).blob();
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement("a");
+                a.href = url;
+                a.download = filename;
+                a.style.display = "none";
+                document.body.appendChild(a);
+                a.click();
+                setTimeout(() => {
+                    document.body.removeChild(a);
+                    URL.revokeObjectURL(url);
+                }, 1500);
+                setStatus("Download started — check your Downloads folder", "success");
+                if (Telegram.HapticFeedback) Telegram.HapticFeedback.notificationOccurred("success");
+                return;
+            } catch (e) {
+                console.warn("Anchor download failed", e);
+            }
+
+            // Method 3: Share via Telegram (always works inside Mini App)
+            try {
+                if (Telegram.openTelegramLink && currentModelUrl) {
+                    // Fallback: open blob URL so user can long-press / share
+                    window.open(currentModelUrl, "_blank");
+                    setStatus("Opened model — long-press to save/share", "success");
+                    return;
+                }
+            } catch (e) {}
+
+            setStatus("Could not auto-download. Use ★ Save, then share from Gallery.", "error");
         }
 
         function getGallery() {
@@ -437,28 +494,51 @@
             catch { return []; }
         }
 
+        function autoSaveToGallery() {
+            if (!currentModelBlob || !currentPreview) return;
+            const reader = new FileReader();
+            reader.onload = () => {
+                const gallery = getGallery();
+                // Avoid duplicates of same asset
+                if (gallery.some(g => g.id === currentAssetId)) return;
+                gallery.unshift({
+                    id: currentAssetId || Date.now().toString(),
+                    preview: currentPreview,
+                    model: reader.result,
+                    created: new Date().toISOString()
+                });
+                if (gallery.length > 24) gallery.length = 24;
+                localStorage.setItem("form3d_gallery", JSON.stringify(gallery));
+                renderGallery();
+            };
+            reader.readAsDataURL(currentModelBlob);
+        }
+
         function saveToGallery() {
             if (!currentModelUrl || !currentPreview) return;
-            fetch(currentModelUrl)
-                .then(r => r.blob())
-                .then(blob => {
-                    const reader = new FileReader();
-                    reader.onload = () => {
-                        const gallery = getGallery();
-                        gallery.unshift({
-                            id: currentAssetId || Date.now().toString(),
-                            preview: currentPreview,
-                            model: reader.result,
-                            created: new Date().toISOString()
-                        });
-                        if (gallery.length > 24) gallery.length = 24;
-                        localStorage.setItem("form3d_gallery", JSON.stringify(gallery));
-                        renderGallery();
-                        setStatus("Saved to your Gallery (device only)", "success");
-                        if (Telegram.HapticFeedback) Telegram.HapticFeedback.notificationOccurred("success");
-                    };
-                    reader.readAsDataURL(blob);
-                });
+            const doSave = (blob) => {
+                const reader = new FileReader();
+                reader.onload = () => {
+                    const gallery = getGallery();
+                    gallery.unshift({
+                        id: currentAssetId || Date.now().toString(),
+                        preview: currentPreview,
+                        model: reader.result,
+                        created: new Date().toISOString()
+                    });
+                    if (gallery.length > 24) gallery.length = 24;
+                    localStorage.setItem("form3d_gallery", JSON.stringify(gallery));
+                    renderGallery();
+                    setStatus("Saved to your Gallery (device only)", "success");
+                    if (Telegram.HapticFeedback) Telegram.HapticFeedback.notificationOccurred("success");
+                };
+                reader.readAsDataURL(blob);
+            };
+            if (currentModelBlob) {
+                doSave(currentModelBlob);
+            } else {
+                fetch(currentModelUrl).then(r => r.blob()).then(doSave);
+            }
         }
 
         function deleteFromGallery(index, event) {
@@ -480,7 +560,7 @@
                 container.innerHTML = `
                     <div class="empty-state">
                         <strong>No models yet</strong>
-                        Generate a 3D model and tap ★ Save.<br>
+                        Generate a 3D model — it auto-saves here.<br>
                         Everything stays only on this phone.
                     </div>`;
                 return;
@@ -512,6 +592,7 @@
             const blob = new Blob([ab], { type: "model/gltf-binary" });
 
             if (currentModelUrl) URL.revokeObjectURL(currentModelUrl);
+            currentModelBlob = blob;
             currentModelUrl = URL.createObjectURL(blob);
             currentAssetId = item.id;
             currentPreview = item.preview;
@@ -519,6 +600,7 @@
             viewer.src = currentModelUrl;
             viewer.style.display = "block";
             actions.style.display = "flex";
+            document.getElementById("qualityNote").style.display = "block";
 
             const previewImg = document.getElementById("preview-img");
             previewImg.src = item.preview;
