@@ -141,7 +141,7 @@ async function postJob(imageData) {
   const headers = { "Content-Type": "application/json" };
   if (API_KEY) headers["X-API-Key"] = API_KEY;
   const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), 45000);
+  const timeoutId = setTimeout(() => controller.abort(), 90000);
   try {
     const res = await fetch(MODAL_BASE + "/", {
       method: "POST", headers,
@@ -155,7 +155,7 @@ async function postJob(imageData) {
     return data.job_id;
   } catch (err) {
     clearTimeout(timeoutId);
-    if (err.name === "AbortError") throw new Error("Could not start job (timeout). Try again.");
+    if (err.name === "AbortError") throw new Error("GPU is waking up (cold start). Please try once more.");
     throw err;
   }
 }
@@ -221,7 +221,7 @@ async function generate3D() {
   if (!selectedBase64) { setStatus("Please upload a photo first.", "error"); return; }
   btn.disabled = true; actions.style.display = "none"; viewer.style.display = "none";
   document.getElementById("qualityNote").style.display = "none";
-  setStatus('<span class="spinner"></span> Starting GPU job…'); setProgress(true);
+  setStatus('<span class="spinner"></span> Starting GPU job… (first run can take ~1 min)'); setProgress(true);
   try {
     const jobId = await startJob();
     setStatus('<span class="spinner"></span> Generating 3D model…');
