@@ -114,7 +114,6 @@ function setProgress(active) {
   document.getElementById("progressBar").classList.toggle("active", !!active);
 }
 
-/** Resize/compress image so Telegram WebView can POST it reliably */
 function compressImage(file, maxSide = 1280, quality = 0.88) {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
@@ -301,37 +300,52 @@ function downloadModel() {
     return;
   }
   const filename = glbFilename(currentAssetId);
+  const publicUrl = currentAssetId ? publicGlbUrl(currentAssetId) : null;
 
+  // 1) Telegram native download API (best inside Mini Apps)
+  if (tgApp && publicUrl && typeof tgApp.downloadFile === "function") {
+    try {
+      tgApp.downloadFile({ url: publicUrl, file_name: filename });
+      setStatus("Download started", "success");
+      return;
+    } catch (e) {
+      console.warn("tg downloadFile failed", e);
+    }
+  }
+
+  // 2) Open public GLB URL so user can Save/Share from browser
+  if (publicUrl) {
+    try {
+      if (tgApp && tgApp.openLink) {
+        tgApp.openLink(publicUrl);
+        setStatus("Opened file — use Save in the browser", "success");
+        return;
+      }
+    } catch (_) {}
+    try {
+      window.open(publicUrl, "_blank");
+      setStatus("Opened file — use Save in the browser", "success");
+      return;
+    } catch (_) {}
+  }
+
+  // 3) Blob download (normal browsers)
   if (currentModelBlob && currentModelUrl) {
     try {
       const a = document.createElement("a");
       a.href = currentModelUrl;
       a.download = filename;
+      a.rel = "noopener";
       a.style.display = "none";
       document.body.appendChild(a);
       a.click();
-      setTimeout(() => a.remove(), 400);
+      setTimeout(() => a.remove(), 500);
       setStatus("Download started", "success");
       return;
     } catch (_) {}
   }
 
-  if (currentAssetId) {
-    const url = publicGlbUrl(currentAssetId);
-    if (url) {
-      try {
-        if (tgApp && tgApp.openLink) {
-          tgApp.openLink(url);
-          setStatus("Opening download…", "success");
-          return;
-        }
-      } catch (_) {}
-      window.open(url, "_blank");
-      setStatus("Opening download…", "success");
-      return;
-    }
-  }
-  setStatus("Download not available", "error");
+  setStatus("Could not start download. Try Save, then open from gallery.", "error");
 }
 
 const GALLERY_KEY = "form3d_gallery_v1";
