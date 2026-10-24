@@ -90,7 +90,7 @@ def remove_background_and_center(image):
 
     subject = rgba.crop(bbox)
     
-    # Fixed square canvas with proper margin padding (Fixes edge clipping)
+    # Fixed square canvas with proper margin padding (Strictly kept as RGBA for SF3D)
     canvas_size = 1024
     canvas = Image.new("RGBA", (canvas_size, canvas_size), (0, 0, 0, 0))
     
@@ -100,12 +100,13 @@ def remove_background_and_center(image):
     paste_x = (canvas_size - subject.width) // 2
     paste_y = (canvas_size - subject.height) // 2
     canvas.paste(subject, (paste_x, paste_y), subject)
-    return canvas.convert("RGB")
+    
+    return canvas  # Returns RGBA Image object required by SF3D prepare_image()
 
 
 @app.cls(
     image=image,
-    gpu="L4",  # Tested for cost/performance balance (change to "A10G" if preferred)
+    gpu="L4",  # Cost-efficient high-performance GPU with 24GB VRAM
     volumes={CACHE_DIR: models_volume},
     scaledown_window=2,
     enable_memory_snapshot=True,
@@ -235,7 +236,7 @@ class SF3DModel:
         texture_resolution = int(item.get("texture_resolution", DEFAULT_TEXTURE_RESOLUTION))
         remesh_option = item.get("remesh", REMESH_MODE)
 
-        # Dynamic dtype fallback (bfloat16 if supported, else float16)
+        # Dynamic dtype fallback (bfloat16 on L4/A10G, safe fallback to float16 if needed)
         dtype = (
             torch.bfloat16
             if torch.cuda.is_bf16_supported()
@@ -385,4 +386,3 @@ def generate():
             ) from exc
 
     return web_app
-    
