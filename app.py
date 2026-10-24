@@ -320,6 +320,7 @@ def generate():
         allow_origins=[
             "https://web.telegram.org",
             "https://telegram-mini-app-hobbies5.vercel.app",
+            "https://berarhydam050-ui.github.io",
         ],
         allow_origin_regex=r"https://.*\.vercel\.app",
         allow_credentials=False,
@@ -341,7 +342,7 @@ def generate():
     async def health():
         return {"status": "ok", "service": APP_NAME, "model": MODEL_ID}
 
-    @web_app.get("/download/{asset_id}")
+    @web_app.api_route("/download/{asset_id}", methods=["GET", "HEAD"])
     async def download_asset(asset_id: str):
         if not UUID_RE.fullmatch(asset_id):
             raise HTTPException(status_code=400, detail="Bad asset id")
