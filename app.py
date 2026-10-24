@@ -271,11 +271,15 @@ class SF3DModel:
             asset_path.write_bytes(glb_bytes)
             models_volume.commit()
 
+            # Return base64 so frontend does not need a second download request
+            model_b64 = base64.b64encode(glb_bytes).decode("utf-8")
+
             return {
                 "success": True,
                 "format": "glb",
                 "mime_type": "model/gltf-binary",
                 "asset_id": asset_id,
+                "model": model_b64,  # base64 GLB – main fix
                 "download_url": f"/download/{asset_id}",
                 "texture_resolution": texture_resolution,
                 "remesh": remesh_option,
