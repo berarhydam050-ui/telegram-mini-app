@@ -164,7 +164,7 @@ def read_job(job_id: str):
     experimental_options={"enable_gpu_snapshot": True},
     secrets=[modal.Secret.from_name("huggingface-secret")],
     timeout=900,
-    max_containers=5,
+    max_containers=1,  # Starter: one GPU job at a time avoids stuck pending queue
 )
 class SF3DModel:
 
