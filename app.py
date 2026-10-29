@@ -172,7 +172,8 @@ def read_job(job_id: str):
 
 @app.cls(
     image=image,
-    gpu="L4",
+    gpu=["L4", "A10G"],                  # prefer L4, fall back to A10G if L4 is busy
+    region="us-east",                    # pin high-capacity region
     volumes={CACHE_DIR: models_volume},
     scaledown_window=2,                    # keep zero idle cost
     max_containers=2,                      # allow a second container if needed
