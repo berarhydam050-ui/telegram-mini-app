@@ -22,7 +22,6 @@ GPU_DEVICE = "cuda:0"
 
 DEFAULT_TEXTURE_RESOLUTION = 2048
 MAX_IMAGE_PIXELS = 40_000_000
-# Slightly more margin so heads/feet are less clipped in SF3D
 FOREGROUND_SCALE = 0.85
 REMESH_MODE = "none"
 
@@ -75,15 +74,14 @@ def decode_image(data: Any):
 
 
 def _get_rembg_session():
-    """Prefer a stronger cutout model when available."""
+    """Prefer u2net (fast, cached). isnet is optional and larger."""
     from rembg import new_session
 
     session = getattr(_get_rembg_session, "_session", None)
     if session is not None:
         return session
 
-    # isnet-general-use usually gives cleaner edges than u2net
-    for model_name in ("isnet-general-use", "u2net"):
+    for model_name in ("u2net", "isnet-general-use"):
         try:
             session = new_session(model_name)
             _get_rembg_session._session = session
@@ -97,37 +95,45 @@ def _get_rembg_session():
     return session
 
 
-def _sharpen_alpha(rgba, threshold=24):
-    """Harder alpha edges reduce blocky fringe artifacts in SF3D."""
+def _soften_alpha(rgba, threshold=8):
+    """Light fringe cleanup — do not zero the whole mask."""
     from PIL import Image
     r, g, b, a = rgba.split()
-    # Binary-ish mask: kill soft fringe pixels
-    a = a.point(lambda p: 255 if p >= threshold else 0)
+    a = a.point(lambda p: 0 if p < threshold else p)
     return Image.merge("RGBA", (r, g, b, a))
+
+
+def _center_on_canvas(subject, canvas_size=1280):
+    from PIL import Image
+    canvas = Image.new("RGBA", (canvas_size, canvas_size), (0, 0, 0, 0))
+    max_dim = int(canvas_size * FOREGROUND_SCALE)
+    subject = subject.copy()
+    subject.thumbnail((max_dim, max_dim), Image.Resampling.LANCZOS)
+    paste_x = (canvas_size - subject.width) // 2
+    paste_y = (canvas_size - subject.height) // 2
+    canvas.paste(subject, (paste_x, paste_y), subject if subject.mode == "RGBA" else None)
+    return canvas
 
 
 def remove_background_and_center(image):
     from PIL import Image
     from rembg import remove
 
-    session = _get_rembg_session()
-    rgba = remove(image, session=session).convert("RGBA")
-    rgba = _sharpen_alpha(rgba)
+    original = image.convert("RGBA")
+    try:
+        session = _get_rembg_session()
+        rgba = remove(original, session=session).convert("RGBA")
+        rgba = _soften_alpha(rgba)
+        alpha = rgba.getchannel("A")
+        bbox = alpha.getbbox()
+        if bbox is not None:
+            return _center_on_canvas(rgba.crop(bbox))
+        print("rembg returned empty mask; falling back to original image")
+    except Exception as exc:
+        print(f"rembg failed ({exc}); falling back to original image")
 
-    alpha = rgba.getchannel("A")
-    bbox = alpha.getbbox()
-    if bbox is None:
-        raise ValueError("No foreground subject was detected.")
-
-    subject = rgba.crop(bbox)
-    canvas_size = 1280
-    canvas = Image.new("RGBA", (canvas_size, canvas_size), (0, 0, 0, 0))
-    max_dim = int(canvas_size * FOREGROUND_SCALE)
-    subject.thumbnail((max_dim, max_dim), Image.Resampling.LANCZOS)
-    paste_x = (canvas_size - subject.width) // 2
-    paste_y = (canvas_size - subject.height) // 2
-    canvas.paste(subject, (paste_x, paste_y), subject)
-    return canvas
+    # Fallback: no cutout — still produce a valid SF3D input
+    return _center_on_canvas(original)
 
 
 def job_status_path(job_id: str) -> Path:
@@ -164,7 +170,7 @@ def read_job(job_id: str):
     experimental_options={"enable_gpu_snapshot": True},
     secrets=[modal.Secret.from_name("huggingface-secret")],
     timeout=900,
-    max_containers=1,  # Starter: one GPU job at a time avoids stuck pending queue
+    max_containers=1,
 )
 class SF3DModel:
 
@@ -241,7 +247,6 @@ class SF3DModel:
         self.model.eval()
         self.model.to(self.device)
 
-        # Warm rembg session inside the snapshot
         _get_rembg_session()
         models_volume.commit()
 
