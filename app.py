@@ -74,14 +74,15 @@ def decode_image(data: Any):
 
 
 def _get_rembg_session():
-    """Prefer u2net (fast, cached). isnet is optional and larger."""
+    """Prefer u2net (fast + small). Only try isnet if u2net fails."""
     from rembg import new_session
 
     session = getattr(_get_rembg_session, "_session", None)
     if session is not None:
         return session
 
-    for model_name in ("u2net", "isnet-general-use"):
+    # Prefer the smaller/faster model to avoid long downloads on cold start
+    for model_name in ("u2net", "u2netp", "isnet-general-use"):
         try:
             session = new_session(model_name)
             _get_rembg_session._session = session
@@ -90,6 +91,7 @@ def _get_rembg_session():
         except Exception as exc:
             print(f"rembg model {model_name} unavailable: {exc}")
 
+    # Last resort
     session = new_session("u2net")
     _get_rembg_session._session = session
     return session
@@ -116,6 +118,7 @@ def _center_on_canvas(subject, canvas_size=1280):
 
 
 def remove_background_and_center(image):
+    """Remove background and center the subject. Never raises – always returns a valid image."""
     from PIL import Image
     from rembg import remove
 
@@ -126,13 +129,19 @@ def remove_background_and_center(image):
         rgba = _soften_alpha(rgba)
         alpha = rgba.getchannel("A")
         bbox = alpha.getbbox()
+
         if bbox is not None:
-            return _center_on_canvas(rgba.crop(bbox))
-        print("rembg returned empty mask; falling back to original image")
+            # Check that the subject is not tiny (avoids "no foreground" style failures downstream)
+            w = bbox[2] - bbox[0]
+            h = bbox[3] - bbox[1]
+            if w > 20 and h > 20:
+                return _center_on_canvas(rgba.crop(bbox))
+
+        print("rembg returned empty or tiny mask; falling back to original image")
     except Exception as exc:
         print(f"rembg failed ({exc}); falling back to original image")
 
-    # Fallback: no cutout — still produce a valid SF3D input
+    # Safe fallback – still produce a valid SF3D input
     return _center_on_canvas(original)
 
 
@@ -165,12 +174,13 @@ def read_job(job_id: str):
     image=image,
     gpu="L4",
     volumes={CACHE_DIR: models_volume},
-    scaledown_window=2,
+    scaledown_window=2,                    # keep zero idle cost
+    max_containers=2,                      # allow a second container if needed
     enable_memory_snapshot=True,
     experimental_options={"enable_gpu_snapshot": True},
     secrets=[modal.Secret.from_name("huggingface-secret")],
     timeout=900,
-    max_containers=1,
+    startup_timeout=600,                   # give cold starts enough time
 )
 class SF3DModel:
 
@@ -247,6 +257,7 @@ class SF3DModel:
         self.model.eval()
         self.model.to(self.device)
 
+        # Pre-load the light rembg model so cold starts don't download isnet
         _get_rembg_session()
         models_volume.commit()
 
