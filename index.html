@@ -1,1 +1,93 @@
-see_next
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no"/>
+<title>Form3D — Image to 3D Pro</title>
+<script src="https://telegram.org/js/telegram-web-app.js"></script>
+<script type="module" src="https://ajax.googleapis.com/ajax/libs/model-viewer/3.4.0/model-viewer.min.js"></script>
+<style>
+:root{--bg:#05070c;--surface:rgba(16,22,36,.72);--text:#f8fafc;--hint:#94a3b8;--primary-gradient:linear-gradient(135deg,#818cf8 0%,#6366f1 45%,#4f46e5 100%);--border:rgba(255,255,255,.07);--success:#34d399;--danger:#f43f5e;--radius:22px}
+*{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent}
+body{font-family:-apple-system,BlinkMacSystemFont,"SF Pro Text","Segoe UI",Roboto,sans-serif;background:var(--bg);color:var(--text);min-height:100vh;padding:0 0 56px}
+.header{padding:22px 20px 18px;text-align:center;position:sticky;top:0;background:rgba(5,7,12,.82);backdrop-filter:blur(24px);z-index:100;border-bottom:1px solid var(--border)}
+.badge-pill{display:inline-flex;background:rgba(99,102,241,.12);color:#a5b4fc;font-size:.68rem;font-weight:700;letter-spacing:.14em;padding:5px 14px;border-radius:999px;margin-bottom:10px;text-transform:uppercase}
+.header h1{font-size:1.55rem;font-weight:800;background:linear-gradient(180deg,#fff,#c7d2fe);-webkit-background-clip:text;-webkit-text-fill-color:transparent}
+.header p{font-size:.84rem;color:var(--hint);margin-top:5px}
+.container{max-width:420px;margin:0 auto;padding:18px 16px}
+.card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:22px;margin-bottom:22px}
+.upload-zone{border:1.5px dashed rgba(129,140,248,.28);border-radius:18px;padding:36px 16px;text-align:center;min-height:190px;display:flex;flex-direction:column;align-items:center;justify-content:center;position:relative;cursor:pointer}
+.upload-zone.has-image{border-style:solid;padding:14px;background:#080c16}
+.upload-zone input{position:absolute;inset:0;opacity:0;cursor:pointer;z-index:20}
+#preview-img{max-width:100%;max-height:250px;border-radius:14px;display:none;object-fit:contain;z-index:10}
+.btn{display:flex;align-items:center;justify-content:center;gap:8px;background:var(--primary-gradient);color:#fff;border:none;padding:16px;font-size:.96rem;font-weight:650;border-radius:16px;cursor:pointer;width:100%;margin-top:18px}
+.btn:disabled{opacity:.38;cursor:not-allowed;background:#1e293b;color:#64748b}
+.btn-outline{background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.1);color:#f1f5f9}
+.btn-row{display:flex;gap:12px;margin-top:14px}
+.btn-row .btn{margin-top:0;flex:1;padding:14px 10px;font-size:.88rem}
+#status{margin-top:16px;font-size:.86rem;color:var(--hint);text-align:center;min-height:24px}
+#status.success{color:var(--success)}#status.error{color:var(--danger)}
+model-viewer{width:100%;height:350px;background:#060a12;border-radius:18px;margin-top:18px;display:none}
+.price-chip{display:inline-flex;margin-top:10px;padding:6px 12px;border-radius:999px;background:rgba(250,204,21,.1);border:1px solid rgba(250,204,21,.25);color:#fde68a;font-size:.78rem;font-weight:650}
+.spinner{display:inline-block;width:15px;height:15px;border:2px solid rgba(255,255,255,.18);border-top-color:#fff;border-radius:50%;animation:spin .65s linear infinite;margin-right:8px;vertical-align:middle}
+@keyframes spin{to{transform:rotate(360deg)}}
+.progress-bar{height:3px;background:rgba(255,255,255,.06);border-radius:99px;margin-top:12px;overflow:hidden;display:none}
+.progress-bar.active{display:block}
+.progress-bar>div{height:100%;width:35%;background:linear-gradient(90deg,#6366f1,#818cf8);animation:progress 1.4s ease-in-out infinite}
+@keyframes progress{0%{transform:translateX(-100%)}100%{transform:translateX(320%)}}
+.section-header{display:flex;justify-content:space-between;margin:34px 0 14px}
+.gallery{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+.empty-state{grid-column:1/-1;text-align:center;padding:44px 20px;color:var(--hint);background:var(--surface);border-radius:20px;border:1px dashed var(--border)}
+.tip{font-size:.74rem;color:var(--hint);text-align:center;margin-top:26px}
+</style>
+</head>
+<body>
+<div class="header"><div class="badge-pill">✦ Stable Fast 3D</div><h1>Form3D Studio</h1><p>Transform any photo into a high-quality 3D model</p></div>
+<div class="container"><div class="card">
+<div class="upload-zone" id="uploadZone">
+<div id="uploadPlaceholder"><div style="font-size:2rem;margin-bottom:10px">📷</div><div style="font-weight:650">Tap to upload a photo</div><div style="font-size:.78rem;color:var(--hint);margin-top:6px">PNG or JPG · clear subject works best</div></div>
+<img id="preview-img" alt="Preview"/><input type="file" id="fileInput" accept="image/*" onchange="handleFile(event)"/>
+</div>
+<button id="generateBtn" class="btn" onclick="generate3D()" disabled>Generate · 5 ⭐</button>
+<div style="text-align:center"><span class="price-chip">5 Telegram Stars per model</span></div>
+<div id="status"></div><div class="progress-bar" id="progressBar"><div></div></div>
+<model-viewer id="viewer" camera-controls auto-rotate shadow-intensity="1.4" exposure="1.15"></model-viewer>
+<div class="btn-row" id="actionButtons" style="display:none">
+<button class="btn" onclick="downloadModel()">⬇ Download GLB</button>
+<button class="btn btn-outline" onclick="saveToGallery()">★ Save</button>
+</div>
+</div>
+<div class="section-header"><h2>My Gallery</h2><span id="galleryCount"></span></div>
+<div class="gallery" id="gallery"></div>
+<p class="tip">Each generation costs 5 Telegram Stars.</p>
+</div>
+<script>
+const tgApp = (window.Telegram && window.Telegram.WebApp) ? window.Telegram.WebApp : null;
+if (tgApp) { tgApp.ready(); tgApp.expand(); }
+const MODAL_BASE = "https://berarhydam050--sf3d-backend-generate.modal.run";
+let selectedBase64 = "", currentModelUrl = null, currentModelBlob = null, currentAssetId = null, currentPreview = null;
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+function setStatus(msg, type=""){const el=document.getElementById("status");el.innerHTML=msg;el.className=type;}
+function setProgress(a){document.getElementById("progressBar").classList.toggle("active",!!a);}
+function getInitData(){return (tgApp && tgApp.initData) ? tgApp.initData : "";}
+function publicGlbUrl(id){return UUID_RE.test(String(id||""))?MODAL_BASE+"/download/"+id:null;}
+function compressImage(file,maxSide=1600,q=0.92){return new Promise((resolve,reject)=>{const r=new FileReader();r.onload=()=>{const img=new Image();img.onload=()=>{let w=img.width,h=img.height;if(w>maxSide||h>maxSide){if(w>h){h=Math.round(h*maxSide/w);w=maxSide;}else{w=Math.round(w*maxSide/h);h=maxSide;}}const c=document.createElement("canvas");c.width=w;c.height=h;c.getContext("2d").drawImage(img,0,0,w,h);resolve(c.toDataURL("image/jpeg",q));};img.onerror=()=>reject(new Error("Invalid image"));img.src=r.result;};r.onerror=()=>reject(new Error("Read failed"));r.readAsDataURL(file);});}
+async function handleFile(e){const file=e.target.files[0];if(!file)return;setStatus('<span class="spinner"></span> Preparing…');try{selectedBase64=await compressImage(file);currentPreview=selectedBase64;const img=document.getElementById("preview-img");img.src=selectedBase64;img.style.display="block";document.getElementById("uploadPlaceholder").style.display="none";document.getElementById("uploadZone").classList.add("has-image");document.getElementById("generateBtn").disabled=false;document.getElementById("viewer").style.display="none";document.getElementById("actionButtons").style.display="none";setStatus("");setProgress(false);}catch(err){setStatus(err.message,"error");}}
+function modelFromBase64(b64){const b=atob(b64);const u=new Uint8Array(b.length);for(let i=0;i<b.length;i++)u[i]=b.charCodeAt(i);return new Blob([u],{type:"model/gltf-binary"});}
+async function createStarsPayment(){const initData=getInitData();if(!initData)throw new Error("Open inside Telegram to pay with Stars");const res=await fetch(MODAL_BASE+"/pay/create",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({initData})});const data=await res.json().catch(()=>({}));if(!res.ok)throw new Error(data.detail||"Could not create payment");if(!data.invoice_url||!data.payment_id)throw new Error("Invalid payment response");return data;}
+function openInvoice(url){return new Promise((resolve,reject)=>{if(!tgApp||typeof tgApp.openInvoice!=="function"){reject(new Error("Telegram payments not available"));return;}tgApp.openInvoice(url,s=>{if(s==="paid")resolve("paid");else if(s==="cancelled")reject(new Error("Payment cancelled"));else reject(new Error("Payment "+s));});});}
+async function waitUntilPaid(paymentId,maxMs=90000){const t0=Date.now();while(Date.now()-t0<maxMs){const res=await fetch(MODAL_BASE+"/pay/"+paymentId);const data=await res.json().catch(()=>({}));if(data.status==="paid")return true;if(data.used)throw new Error("Payment already used");await new Promise(r=>setTimeout(r,1500));}throw new Error("Payment not confirmed yet");}
+async function postJob(imageData,paymentId){const res=await fetch(MODAL_BASE+"/",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({image:imageData,texture_resolution:2048,remesh:"none",return_base64:true,async:true,payment_id:paymentId,initData:getInitData()})});const data=await res.json().catch(()=>({}));if(!res.ok)throw new Error(data.detail||("HTTP "+res.status));if(!data.job_id)throw new Error("No job id");return data.job_id;}
+async function pollJob(jobId,maxWaitMs=240000){const t0=Date.now();let delay=2000;while(Date.now()-t0<maxWaitMs){await new Promise(r=>setTimeout(r,delay));delay=Math.min(delay+500,4000);const res=await fetch(MODAL_BASE+"/job/"+jobId);if(res.status===404){setStatus('<span class="spinner"></span> Waiting for GPU…');continue;}const data=await res.json().catch(()=>({}));if(data.status==="queued"||data.status==="running"){setStatus('<span class="spinner"></span> Generating 3D model…');continue;}if(data.status==="error")throw new Error(data.error||"GPU error");if(data.status==="done"||data.asset_id||data.model)return data;}throw new Error("Timed out");}
+async function generate3D(){const btn=document.getElementById("generateBtn");if(!selectedBase64){setStatus("Upload a photo first","error");return;}btn.disabled=true;setProgress(true);try{setStatus('<span class="spinner"></span> Creating Stars invoice…');const pay=await createStarsPayment();setStatus('<span class="spinner"></span> Pay 5 ⭐ to continue…');await openInvoice(pay.invoice_url);setStatus('<span class="spinner"></span> Confirming payment…');await waitUntilPaid(pay.payment_id);setStatus('<span class="spinner"></span> Starting GPU…');const jobId=await postJob(selectedBase64,pay.payment_id);setStatus('<span class="spinner"></span> Generating 3D model…');const data=await pollJob(jobId);if(data.model){currentModelBlob=modelFromBase64(data.model);currentModelUrl=URL.createObjectURL(currentModelBlob);currentAssetId=data.asset_id||jobId;}else if(data.asset_id){currentAssetId=data.asset_id;const glb=await fetch(publicGlbUrl(data.asset_id));currentModelBlob=await glb.blob();currentModelUrl=URL.createObjectURL(currentModelBlob);}else throw new Error("No model returned");const viewer=document.getElementById("viewer");viewer.src=currentModelUrl;viewer.style.display="block";document.getElementById("actionButtons").style.display="flex";setStatus("Ready — explore your model","success");setProgress(false);}catch(err){setStatus(err.message||"Failed","error");setProgress(false);}finally{btn.disabled=false;}}
+function downloadModel(){if(!currentAssetId&&!currentModelBlob){setStatus("No model","error");return;}const url=publicGlbUrl(currentAssetId);const name="form3d-"+(currentAssetId||"model")+".glb";if(tgApp&&url&&tgApp.downloadFile){try{tgApp.downloadFile({url,file_name:name});setStatus("Download started","success");return;}catch(e){}}if(url){if(tgApp&&tgApp.openLink)tgApp.openLink(url);else window.open(url,"_blank");setStatus("Opened file","success");return;}setStatus("Could not download","error");}
+const GALLERY_KEY="form3d_gallery_v1";
+function loadGallery(){try{return JSON.parse(localStorage.getItem(GALLERY_KEY)||"[]");}catch{return[];}}
+function saveGallery(items){localStorage.setItem(GALLERY_KEY,JSON.stringify(items.slice(0,40)));}
+function renderGallery(){const items=loadGallery();const el=document.getElementById("gallery");document.getElementById("galleryCount").textContent=items.length?items.length+" saved":"";if(!items.length){el.innerHTML='<div class="empty-state"><strong>No models yet</strong>Generate and tap ★ Save</div>';return;}el.innerHTML=items.map((it,i)=>`<div style="background:var(--surface);border:1px solid var(--border);border-radius:14px;overflow:hidden;cursor:pointer" onclick="openGalleryItem(${i})"><img src="${it.preview}" style="width:100%;height:120px;object-fit:cover"/><div style="padding:8px;font-size:.72rem;color:var(--hint)">${it.date}</div></div>`).join("");}
+function saveToGallery(){if(!currentPreview||!currentAssetId)return;const items=loadGallery();items.unshift({id:currentAssetId,preview:currentPreview,date:new Date().toLocaleDateString(undefined,{month:"short",day:"numeric"}),url:publicGlbUrl(currentAssetId)});saveGallery(items);renderGallery();setStatus("Saved","success");}
+async function openGalleryItem(i){const it=loadGallery()[i];if(!it)return;setStatus('<span class="spinner"></span> Loading…');try{const res=await fetch(it.url||publicGlbUrl(it.id));const blob=await res.blob();if(currentModelUrl)URL.revokeObjectURL(currentModelUrl);currentModelBlob=blob;currentModelUrl=URL.createObjectURL(blob);currentAssetId=it.id;const v=document.getElementById("viewer");v.src=currentModelUrl;v.style.display="block";document.getElementById("actionButtons").style.display="flex";setStatus("Loaded","success");}catch(e){setStatus(e.message,"error");}}
+renderGallery();
+</script>
+</body>
+</html>
