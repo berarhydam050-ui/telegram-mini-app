@@ -24,7 +24,7 @@ DEFAULT_TEXTURE_RESOLUTION = 2048
 MAX_IMAGE_PIXELS = 40_000_000
 FOREGROUND_SCALE = 0.85
 REMESH_MODE = "none"
-STARS_PRICE = 5
+STARS_PRICE = 5  # Telegram Stars per generation — redeploy 2026-11-06
 
 UUID_RE = re.compile(
     r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
@@ -41,8 +41,6 @@ image = modal.Image.from_registry(
     add_python="3.10",
 ).pip_install("httpx")
 
-# NOTE: Full payment-enabled backend is in the next commit.
-# This restore unblocks the broken PLACEHOLDER deploy.
 
 def decode_image(data: Any):
     from PIL import Image, ImageOps
