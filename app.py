@@ -23,12 +23,15 @@ DEFAULT_TEXTURE_RESOLUTION = 2048
 FOREGROUND_SCALE = 0.85
 REMESH_MODE = "none"
 
-# product_id -> {stars, credits, title}
+# product_id -> {stars, credits, title, desc}
 PACKS = {
-    "single": {"stars": 5, "credits": 1, "title": "1× 3D model", "desc": "One high-quality 3D model"},
-    "pack100": {"stars": 100, "credits": 25, "title": "Pack 25 models", "desc": "25 generations (100 Stars)"},
-    "pack200": {"stars": 200, "credits": 55, "title": "Pack 55 models", "desc": "55 generations (200 Stars)"},
-    "pack500": {"stars": 500, "credits": 150, "title": "Pack 150 models", "desc": "150 generations (500 Stars)"},
+    "first": {"stars": 80, "credits": 10, "title": "First purchase 10 models", "desc": "Welcome offer: 10 models for 80 Stars"},
+    "p3": {"stars": 50, "credits": 3, "title": "3 models", "desc": "Balance top-up: 3 models"},
+    "p10": {"stars": 150, "credits": 10, "title": "10 models", "desc": "Balance top-up: 10 models"},
+    "p30": {"stars": 390, "credits": 30, "title": "30 models", "desc": "Balance top-up: 30 models"},
+    "p100": {"stars": 990, "credits": 100, "title": "100 models", "desc": "Balance top-up: 100 models"},
+    # legacy aliases
+    "single": {"stars": 50, "credits": 3, "title": "3 models", "desc": "Balance top-up: 3 models"},
 }
 
 UUID_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", re.I)
@@ -308,7 +311,7 @@ def generate():
             user = validate_init_data(body.get("initData") or body.get("init_data") or "")
         except ValueError as e:
             raise HTTPException(401, str(e))
-        product_id = body.get("product_id") or body.get("product") or "single"
+        product_id = body.get("product_id") or body.get("product") or "p3"
         pack = PACKS.get(product_id)
         if not pack:
             raise HTTPException(400, f"Unknown product_id. Use: {', '.join(PACKS)}")
@@ -365,7 +368,7 @@ def generate():
                     uid = (msg.get("from") or {}).get("id") or existing.get("user_id")
                     if uid:
                         existing["user_id"] = uid
-                        credits = int(existing.get("credits") or PACKS.get(existing.get("product_id") or "single", {}).get("credits") or 1)
+                        credits = int(existing.get("credits") or PACKS.get(existing.get("product_id") or "p3", {}).get("credits") or 1)
                         add_credits(int(uid), credits)
                         existing["credits_granted"] = credits
                     write_payment(payment_id, existing)
@@ -407,7 +410,6 @@ def generate():
             if bot_token():
                 try:
                     user = validate_init_data(data.get("initData") or data.get("init_data") or "")
-                    # Prefer wallet credits; optional one-shot payment_id still supported
                     payment_id = data.get("payment_id") or data.get("paymentId") or ""
                     if payment_id:
                         pay = read_payment(payment_id)
@@ -416,7 +418,6 @@ def generate():
                                 raise ValueError("Payment belongs to another user")
                             pay["used"] = True
                             write_payment(payment_id, pay)
-                            # credits already granted on webhook for packs; for safety grant 1 if none
                             u = get_user(user["id"])
                             if int(u.get("credits") or 0) < 1 and int(pay.get("credits") or 0) >= 1:
                                 add_credits(user["id"], int(pay["credits"]))
