@@ -7,89 +7,93 @@
 <script src="https://telegram.org/js/telegram-web-app.js"></script>
 <script type="module" src="https://ajax.googleapis.com/ajax/libs/model-viewer/3.4.0/model-viewer.min.js"></script>
 <style>
-:root{--bg:#05070c;--surface:rgba(16,22,36,.72);--text:#f8fafc;--hint:#94a3b8;--primary-gradient:linear-gradient(135deg,#818cf8 0%,#6366f1 45%,#4f46e5 100%);--border:rgba(255,255,255,.07);--success:#34d399;--danger:#f43f5e;--radius:22px}
+:root{--bg:#0e1621;--surface:#17212b;--text:#f5f5f5;--hint:#8b9aab;--green:#31b545;--green-dark:#28a03c;--primary:#2AABEE;--border:rgba(255,255,255,.08);--danger:#e53935;--radius:16px}
 *{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent}
-body{font-family:-apple-system,BlinkMacSystemFont,"SF Pro Text","Segoe UI",Roboto,sans-serif;background:var(--bg);color:var(--text);min-height:100vh;padding:0 0 56px}
-.header{padding:22px 20px 18px;text-align:center;position:sticky;top:0;background:rgba(5,7,12,.82);backdrop-filter:blur(24px);z-index:100;border-bottom:1px solid var(--border)}
-.badge-pill{display:inline-flex;background:rgba(99,102,241,.12);color:#a5b4fc;font-size:.68rem;font-weight:700;letter-spacing:.14em;padding:5px 14px;border-radius:999px;margin-bottom:10px;text-transform:uppercase}
-.header h1{font-size:1.55rem;font-weight:800;background:linear-gradient(180deg,#fff,#c7d2fe);-webkit-background-clip:text;-webkit-text-fill-color:transparent}
-.header p{font-size:.84rem;color:var(--hint);margin-top:5px}
-.container{max-width:420px;margin:0 auto;padding:18px 16px}
-.card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:22px;margin-bottom:22px}
-.upload-zone{border:1.5px dashed rgba(129,140,248,.28);border-radius:18px;padding:36px 16px;text-align:center;min-height:190px;display:flex;flex-direction:column;align-items:center;justify-content:center;position:relative;cursor:pointer}
-.upload-zone.has-image{border-style:solid;padding:14px;background:#080c16}
+body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;background:var(--bg);color:var(--text);min-height:100vh;padding:0 0 48px}
+.header{padding:18px 16px 14px;text-align:center;background:var(--surface);border-bottom:1px solid var(--border)}
+.header h1{font-size:1.35rem;font-weight:700}
+.header p{font-size:.8rem;color:var(--hint);margin-top:4px}
+.container{max-width:420px;margin:0 auto;padding:14px}
+.card{background:var(--surface);border-radius:var(--radius);padding:16px;margin-bottom:14px}
+.balance-row{display:flex;align-items:center;justify-content:space-between;margin-bottom:14px}
+.balance-row .label{color:var(--hint);font-size:.85rem}
+.balance-row .val{font-size:1.1rem;font-weight:700;color:#f5d565}
+.upload-zone{border:1.5px dashed rgba(255,255,255,.12);border-radius:14px;padding:28px 14px;text-align:center;min-height:160px;display:flex;flex-direction:column;align-items:center;justify-content:center;position:relative;cursor:pointer;background:rgba(0,0,0,.15)}
+.upload-zone.has-image{border-style:solid;padding:10px}
 .upload-zone input{position:absolute;inset:0;opacity:0;cursor:pointer;z-index:20}
-#preview-img{max-width:100%;max-height:250px;border-radius:14px;display:none;object-fit:contain;z-index:10}
-.btn{display:flex;align-items:center;justify-content:center;gap:8px;background:var(--primary-gradient);color:#fff;border:none;padding:16px;font-size:.96rem;font-weight:650;border-radius:16px;cursor:pointer;width:100%;margin-top:14px}
-.btn:disabled{opacity:.38;cursor:not-allowed;background:#1e293b;color:#64748b}
-.btn-outline{background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.1);color:#f1f5f9}
-.btn-row{display:flex;gap:12px;margin-top:14px}
-.btn-row .btn{margin-top:0;flex:1;padding:14px 10px;font-size:.88rem}
-#status{margin-top:16px;font-size:.86rem;color:var(--hint);text-align:center;min-height:24px}
-#status.success{color:var(--success)}#status.error{color:var(--danger)}
-model-viewer{width:100%;height:350px;background:#060a12;border-radius:18px;margin-top:18px;display:none}
-.credits-bar{display:flex;align-items:center;justify-content:space-between;padding:10px 14px;border-radius:14px;background:rgba(250,204,21,.08);border:1px solid rgba(250,204,21,.22);margin-bottom:14px;font-size:.86rem}
-.credits-bar strong{color:#fde68a}
-.packs{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:12px}
-.pack{background:rgba(255,255,255,.03);border:1px solid var(--border);border-radius:14px;padding:12px 10px;text-align:center;cursor:pointer;transition:.2s}
-.pack:active{transform:scale(.97)}
-.pack .stars{color:#fde68a;font-weight:700;font-size:.95rem}
-.pack .meta{color:var(--hint);font-size:.72rem;margin-top:4px}
-.pack.best{border-color:rgba(129,140,248,.45);background:rgba(99,102,241,.08)}
-.spinner{display:inline-block;width:15px;height:15px;border:2px solid rgba(255,255,255,.18);border-top-color:#fff;border-radius:50%;animation:spin .65s linear infinite;margin-right:8px;vertical-align:middle}
+#preview-img{max-width:100%;max-height:220px;border-radius:10px;display:none;object-fit:contain;z-index:10}
+.btn-gen{display:flex;align-items:center;justify-content:center;width:100%;padding:14px;margin-top:12px;border:none;border-radius:12px;background:var(--primary);color:#fff;font-size:.95rem;font-weight:650;cursor:pointer}
+.btn-gen:disabled{opacity:.4;cursor:not-allowed;background:#3a4a5a}
+.btn-row{display:flex;gap:10px;margin-top:12px}
+.btn-row button{flex:1;padding:12px;border-radius:12px;border:none;font-weight:650;cursor:pointer}
+.btn-dl{background:var(--primary);color:#fff}
+.btn-save{background:rgba(255,255,255,.06);color:#fff;border:1px solid var(--border)!important}
+#status{margin-top:12px;font-size:.84rem;color:var(--hint);text-align:center;min-height:22px}
+#status.success{color:#4caf50}#status.error{color:var(--danger)}
+model-viewer{width:100%;height:320px;background:#0a1018;border-radius:12px;margin-top:12px;display:none}
+.shop-title{font-weight:700;font-size:.95rem;margin-bottom:4px}
+.shop-sub{font-size:.75rem;color:var(--hint);margin-bottom:12px}
+.pack-full{display:block;width:100%;padding:14px;margin-bottom:10px;border:none;border-radius:12px;background:var(--green);color:#fff;font-size:.92rem;font-weight:700;text-align:center;cursor:pointer}
+.pack-full:active{background:var(--green-dark)}
+.pack-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.pack-btn{padding:14px 10px;border:none;border-radius:12px;background:var(--green);color:#fff;font-weight:700;font-size:.88rem;cursor:pointer;text-align:center}
+.pack-btn:active{background:var(--green-dark)}
+.pack-btn .sub{display:block;font-size:.72rem;font-weight:500;opacity:.9;margin-top:2px}
+.spinner{display:inline-block;width:14px;height:14px;border:2px solid rgba(255,255,255,.2);border-top-color:#fff;border-radius:50%;animation:spin .6s linear infinite;margin-right:6px;vertical-align:middle}
 @keyframes spin{to{transform:rotate(360deg)}}
-.progress-bar{height:3px;background:rgba(255,255,255,.06);border-radius:99px;margin-top:12px;overflow:hidden;display:none}
-.progress-bar.active{display:block}
-.progress-bar>div{height:100%;width:35%;background:linear-gradient(90deg,#6366f1,#818cf8);animation:progress 1.4s ease-in-out infinite}
-@keyframes progress{0%{transform:translateX(-100%)}100%{transform:translateX(320%)}}
-.section-header{display:flex;justify-content:space-between;margin:34px 0 14px}
-.gallery{display:grid;grid-template-columns:1fr 1fr;gap:14px}
-.empty-state{grid-column:1/-1;text-align:center;padding:44px 20px;color:var(--hint);background:var(--surface);border-radius:20px;border:1px dashed var(--border)}
-.tip{font-size:.74rem;color:var(--hint);text-align:center;margin-top:26px}
+.section-header{display:flex;justify-content:space-between;margin:28px 0 12px;padding:0 2px}
+.gallery{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.empty-state{grid-column:1/-1;text-align:center;padding:36px 16px;color:var(--hint);background:var(--surface);border-radius:14px}
+.tip{font-size:.72rem;color:var(--hint);text-align:center;margin-top:20px}
 </style>
 </head>
 <body>
-<div class="header"><div class="badge-pill">✦ Stable Fast 3D</div><h1>Form3D Studio</h1><p>Transform any photo into a high-quality 3D model</p></div>
+<div class="header"><h1>Form3D Studio</h1><p>Photo → 3D model · pay with Telegram Stars</p></div>
 <div class="container">
+
 <div class="card">
-<div class="credits-bar"><span>Your credits</span><strong id="creditCount">…</strong></div>
+<div class="balance-row"><span class="label">Balance</span><span class="val" id="creditCount">⚡ 0</span></div>
 <div class="upload-zone" id="uploadZone">
-<div id="uploadPlaceholder"><div style="font-size:2rem;margin-bottom:10px">📷</div><div style="font-weight:650">Tap to upload a photo</div><div style="font-size:.78rem;color:var(--hint);margin-top:6px">PNG or JPG · clear subject works best</div></div>
+<div id="uploadPlaceholder"><div style="font-size:1.8rem;margin-bottom:8px">📷</div><div style="font-weight:600">Tap to upload a photo</div><div style="font-size:.75rem;color:var(--hint);margin-top:4px">PNG or JPG</div></div>
 <img id="preview-img" alt="Preview"/><input type="file" id="fileInput" accept="image/*" onchange="handleFile(event)"/>
 </div>
-<button id="generateBtn" class="btn" onclick="generate3D()" disabled>Generate 3D Model</button>
-<div id="status"></div><div class="progress-bar" id="progressBar"><div></div></div>
-<model-viewer id="viewer" camera-controls auto-rotate shadow-intensity="1.4" exposure="1.15"></model-viewer>
+<button id="generateBtn" class="btn-gen" onclick="generate3D()" disabled>Generate 3D Model</button>
+<div id="status"></div>
+<model-viewer id="viewer" camera-controls auto-rotate shadow-intensity="1.2" exposure="1.1"></model-viewer>
 <div class="btn-row" id="actionButtons" style="display:none">
-<button class="btn" onclick="downloadModel()">⬇ Download GLB</button>
-<button class="btn btn-outline" onclick="saveToGallery()">★ Save</button>
+<button class="btn-dl" onclick="downloadModel()">⬇ Download GLB</button>
+<button class="btn-save" onclick="saveToGallery()">★ Save</button>
 </div>
 </div>
+
 <div class="card">
-<div style="font-weight:700;margin-bottom:4px">Buy credits with Stars</div>
-<div style="font-size:.78rem;color:var(--hint);margin-bottom:8px">1 credit = 1 model</div>
-<div class="packs">
-<div class="pack" onclick="buyPack('single')"><div class="stars">5 ⭐</div><div class="meta">1 model</div></div>
-<div class="pack" onclick="buyPack('pack100')"><div class="stars">100 ⭐</div><div class="meta">25 models</div></div>
-<div class="pack best" onclick="buyPack('pack200')"><div class="stars">200 ⭐</div><div class="meta">55 models · best</div></div>
-<div class="pack" onclick="buyPack('pack500')"><div class="stars">500 ⭐</div><div class="meta">150 models</div></div>
+<div class="shop-title">Top up balance</div>
+<div class="shop-sub">1 ⚡ = 1 model · one-time, no subscription</div>
+<button class="pack-full" onclick="buyPack('first')">🎁 First purchase: 10 ⚡ for 80 ⭐</button>
+<div class="pack-grid">
+<button class="pack-btn" onclick="buyPack('p3')">3 ⚡ · 50 ⭐</button>
+<button class="pack-btn" onclick="buyPack('p10')">10 ⚡ · 150 ⭐</button>
+<button class="pack-btn" onclick="buyPack('p30')">30 ⚡ · 390 ⭐</button>
+<button class="pack-btn" onclick="buyPack('p100')">100 ⚡ · 990 ⭐</button>
 </div>
 </div>
-<div class="section-header"><h2>My Gallery</h2><span id="galleryCount"></span></div>
+
+<div class="section-header"><h2 style="font-size:1rem">My Gallery</h2><span id="galleryCount" style="color:var(--hint);font-size:.8rem"></span></div>
 <div class="gallery" id="gallery"></div>
-<p class="tip">Pay with Telegram Stars · credits stay on your account</p>
+<p class="tip">Paid with Telegram Stars · no auto-renewal</p>
 </div>
+
 <script>
 const tgApp = (window.Telegram && window.Telegram.WebApp) ? window.Telegram.WebApp : null;
-if (tgApp) { tgApp.ready(); tgApp.expand(); }
+if (tgApp) { tgApp.ready(); tgApp.expand(); if (tgApp.setHeaderColor) try{tgApp.setHeaderColor("#17212b");}catch(e){} }
 const MODAL_BASE = "https://berarhydam050--sf3d-backend-generate.modal.run";
 let selectedBase64 = "", currentModelUrl = null, currentModelBlob = null, currentAssetId = null, currentPreview = null, userCredits = 0;
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 function setStatus(msg, type=""){const el=document.getElementById("status");el.innerHTML=msg;el.className=type;}
-function setProgress(a){document.getElementById("progressBar").classList.toggle("active",!!a);}
 function getInitData(){return (tgApp && tgApp.initData) ? tgApp.initData : "";}
 function publicGlbUrl(id){return UUID_RE.test(String(id||""))?MODAL_BASE+"/download/"+id:null;}
-function setCredits(n){userCredits=n;document.getElementById("creditCount").textContent=n+" left";}
+function setCredits(n){userCredits=n;document.getElementById("creditCount").textContent="⚡ "+n;}
 
 async function refreshCredits(){
   const initData=getInitData();
@@ -97,14 +101,32 @@ async function refreshCredits(){
   try{
     const res=await fetch(MODAL_BASE+"/credits?initData="+encodeURIComponent(initData));
     const data=await res.json().catch(()=>({}));
-    if(res.ok) setCredits(Number(data.credits)||0);
-    else setCredits(0);
+    setCredits(res.ok ? (Number(data.credits)||0) : 0);
   }catch(e){setCredits(0);}
 }
 
-function compressImage(file,maxSide=1600,q=0.92){return new Promise((resolve,reject)=>{const r=new FileReader();r.onload=()=>{const img=new Image();img.onload=()=>{let w=img.width,h=img.height;if(w>maxSide||h>maxSide){if(w>h){h=Math.round(h*maxSide/w);w=maxSide;}else{w=Math.round(w*maxSide/h);h=maxSide;}}const c=document.createElement("canvas");c.width=w;c.height=h;c.getContext("2d").drawImage(img,0,0,w,h);resolve(c.toDataURL("image/jpeg",q));};img.onerror=()=>reject(new Error("Invalid image"));img.src=r.result;};r.onerror=()=>reject(new Error("Read failed"));r.readAsDataURL(file);});}
+function compressImage(file,maxSide=1600,q=0.92){
+  return new Promise((resolve,reject)=>{
+    const r=new FileReader();
+    r.onload=()=>{const img=new Image();img.onload=()=>{let w=img.width,h=img.height;if(w>maxSide||h>maxSide){if(w>h){h=Math.round(h*maxSide/w);w=maxSide;}else{w=Math.round(w*maxSide/h);h=maxSide;}}const c=document.createElement("canvas");c.width=w;c.height=h;c.getContext("2d").drawImage(img,0,0,w,h);resolve(c.toDataURL("image/jpeg",q));};img.onerror=()=>reject(new Error("Invalid image"));img.src=r.result;};
+    r.onerror=()=>reject(new Error("Read failed"));r.readAsDataURL(file);
+  });
+}
 
-async function handleFile(e){const file=e.target.files[0];if(!file)return;setStatus('<span class="spinner"></span> Preparing…');try{selectedBase64=await compressImage(file);currentPreview=selectedBase64;const img=document.getElementById("preview-img");img.src=selectedBase64;img.style.display="block";document.getElementById("uploadPlaceholder").style.display="none";document.getElementById("uploadZone").classList.add("has-image");document.getElementById("generateBtn").disabled=false;document.getElementById("viewer").style.display="none";document.getElementById("actionButtons").style.display="none";setStatus("");setProgress(false);}catch(err){setStatus(err.message,"error");}}
+async function handleFile(e){
+  const file=e.target.files[0];if(!file)return;
+  setStatus('<span class="spinner"></span> Preparing…');
+  try{
+    selectedBase64=await compressImage(file);currentPreview=selectedBase64;
+    const img=document.getElementById("preview-img");img.src=selectedBase64;img.style.display="block";
+    document.getElementById("uploadPlaceholder").style.display="none";
+    document.getElementById("uploadZone").classList.add("has-image");
+    document.getElementById("generateBtn").disabled=false;
+    document.getElementById("viewer").style.display="none";
+    document.getElementById("actionButtons").style.display="none";
+    setStatus("");
+  }catch(err){setStatus(err.message,"error");}
+}
 
 function modelFromBase64(b64){const b=atob(b64);const u=new Uint8Array(b.length);for(let i=0;i<b.length;i++)u[i]=b.charCodeAt(i);return new Blob([u],{type:"model/gltf-binary"});}
 
@@ -118,7 +140,12 @@ async function createStarsPayment(productId){
   return data;
 }
 
-function openInvoice(url){return new Promise((resolve,reject)=>{if(!tgApp||typeof tgApp.openInvoice!=="function"){reject(new Error("Telegram payments not available"));return;}tgApp.openInvoice(url,s=>{if(s==="paid")resolve("paid");else if(s==="cancelled")reject(new Error("Payment cancelled"));else reject(new Error("Payment "+s));});});}
+function openInvoice(url){
+  return new Promise((resolve,reject)=>{
+    if(!tgApp||typeof tgApp.openInvoice!=="function"){reject(new Error("Telegram payments not available"));return;}
+    tgApp.openInvoice(url,s=>{if(s==="paid")resolve("paid");else if(s==="cancelled")reject(new Error("Payment cancelled"));else reject(new Error("Payment "+s));});
+  });
+}
 
 async function waitUntilPaid(paymentId,maxMs=90000){
   const t0=Date.now();
@@ -132,19 +159,16 @@ async function waitUntilPaid(paymentId,maxMs=90000){
 }
 
 async function buyPack(productId){
-  setStatus('<span class="spinner"></span> Opening Stars payment…');setProgress(true);
+  setStatus('<span class="spinner"></span> Opening payment…');
   try{
     const pay=await createStarsPayment(productId);
-    setStatus('<span class="spinner"></span> Pay with Telegram Stars…');
+    setStatus('<span class="spinner"></span> Confirm in Telegram…');
     await openInvoice(pay.invoice_url);
-    setStatus('<span class="spinner"></span> Confirming…');
+    setStatus('<span class="spinner"></span> Adding credits…');
     await waitUntilPaid(pay.payment_id);
     await refreshCredits();
-    setStatus("Credits added · "+userCredits+" left","success");
-    setProgress(false);
-  }catch(err){
-    setStatus(err.message||"Payment failed","error");setProgress(false);
-  }
+    setStatus("Balance top-up done · ⚡ "+userCredits,"success");
+  }catch(err){setStatus(err.message||"Payment failed","error");}
 }
 
 async function postJob(imageData){
@@ -162,7 +186,7 @@ async function pollJob(jobId,maxWaitMs=240000){
     const res=await fetch(MODAL_BASE+"/job/"+jobId);
     if(res.status===404){setStatus('<span class="spinner"></span> Waiting for GPU…');continue;}
     const data=await res.json().catch(()=>({}));
-    if(data.status==="queued"||data.status==="running"){setStatus('<span class="spinner"></span> Generating 3D model…');continue;}
+    if(data.status==="queued"||data.status==="running"){setStatus('<span class="spinner"></span> Generating…');continue;}
     if(data.status==="error") throw new Error(data.error||"GPU error");
     if(data.status==="done"||data.asset_id||data.model) return data;
   }
@@ -173,11 +197,8 @@ async function generate3D(){
   const btn=document.getElementById("generateBtn");
   if(!selectedBase64){setStatus("Upload a photo first","error");return;}
   await refreshCredits();
-  if(userCredits<1){
-    setStatus("No credits — buy a Stars pack below","error");
-    return;
-  }
-  btn.disabled=true;setProgress(true);
+  if(userCredits<1){setStatus("No balance — top up below","error");return;}
+  btn.disabled=true;
   try{
     setStatus('<span class="spinner"></span> Starting GPU…');
     const jobId=await postJob(selectedBase64);
@@ -188,10 +209,9 @@ async function generate3D(){
     else throw new Error("No model returned");
     const viewer=document.getElementById("viewer");viewer.src=currentModelUrl;viewer.style.display="block";document.getElementById("actionButtons").style.display="flex";
     await refreshCredits();
-    setStatus("Ready — "+userCredits+" credits left","success");setProgress(false);
-  }catch(err){
-    setStatus(err.message||"Failed","error");setProgress(false);
-  }finally{btn.disabled=false;}
+    setStatus("Ready · ⚡ "+userCredits+" left","success");
+  }catch(err){setStatus(err.message||"Failed","error");}
+  finally{btn.disabled=false;}
 }
 
 function downloadModel(){
@@ -205,9 +225,29 @@ function downloadModel(){
 const GALLERY_KEY="form3d_gallery_v1";
 function loadGallery(){try{return JSON.parse(localStorage.getItem(GALLERY_KEY)||"[]");}catch{return[];}}
 function saveGallery(items){localStorage.setItem(GALLERY_KEY,JSON.stringify(items.slice(0,40)));}
-function renderGallery(){const items=loadGallery();const el=document.getElementById("gallery");document.getElementById("galleryCount").textContent=items.length?items.length+" saved":"";if(!items.length){el.innerHTML='<div class="empty-state"><strong>No models yet</strong>Generate and tap ★ Save</div>';return;}el.innerHTML=items.map((it,i)=>`<div style="background:var(--surface);border:1px solid var(--border);border-radius:14px;overflow:hidden;cursor:pointer" onclick="openGalleryItem(${i})"><img src="${it.preview}" style="width:100%;height:120px;object-fit:cover"/><div style="padding:8px;font-size:.72rem;color:var(--hint)">${it.date}</div></div>`).join("");}
-function saveToGallery(){if(!currentPreview||!currentAssetId)return;const items=loadGallery();items.unshift({id:currentAssetId,preview:currentPreview,date:new Date().toLocaleDateString(undefined,{month:"short",day:"numeric"}),url:publicGlbUrl(currentAssetId)});saveGallery(items);renderGallery();setStatus("Saved","success");}
-async function openGalleryItem(i){const it=loadGallery()[i];if(!it)return;setStatus('<span class="spinner"></span> Loading…');try{const res=await fetch(it.url||publicGlbUrl(it.id));const blob=await res.blob();if(currentModelUrl)URL.revokeObjectURL(currentModelUrl);currentModelBlob=blob;currentModelUrl=URL.createObjectURL(blob);currentAssetId=it.id;const v=document.getElementById("viewer");v.src=currentModelUrl;v.style.display="block";document.getElementById("actionButtons").style.display="flex";setStatus("Loaded","success");}catch(e){setStatus(e.message,"error");}}
+function renderGallery(){
+  const items=loadGallery();const el=document.getElementById("gallery");
+  document.getElementById("galleryCount").textContent=items.length?items.length+" saved":"";
+  if(!items.length){el.innerHTML='<div class="empty-state">No models yet</div>';return;}
+  el.innerHTML=items.map((it,i)=>`<div style="background:var(--surface);border-radius:12px;overflow:hidden;cursor:pointer" onclick="openGalleryItem(${i})"><img src="${it.preview}" style="width:100%;height:110px;object-fit:cover"/><div style="padding:8px;font-size:.72rem;color:var(--hint)">${it.date}</div></div>`).join("");
+}
+function saveToGallery(){
+  if(!currentPreview||!currentAssetId)return;
+  const items=loadGallery();
+  items.unshift({id:currentAssetId,preview:currentPreview,date:new Date().toLocaleDateString(undefined,{month:"short",day:"numeric"}),url:publicGlbUrl(currentAssetId)});
+  saveGallery(items);renderGallery();setStatus("Saved","success");
+}
+async function openGalleryItem(i){
+  const it=loadGallery()[i];if(!it)return;
+  setStatus('<span class="spinner"></span> Loading…');
+  try{
+    const res=await fetch(it.url||publicGlbUrl(it.id));const blob=await res.blob();
+    if(currentModelUrl)URL.revokeObjectURL(currentModelUrl);
+    currentModelBlob=blob;currentModelUrl=URL.createObjectURL(blob);currentAssetId=it.id;
+    const v=document.getElementById("viewer");v.src=currentModelUrl;v.style.display="block";document.getElementById("actionButtons").style.display="flex";
+    setStatus("Loaded","success");
+  }catch(e){setStatus(e.message,"error");}
+}
 renderGallery();
 refreshCredits();
 </script>
