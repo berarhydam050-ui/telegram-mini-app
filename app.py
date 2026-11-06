@@ -218,8 +218,10 @@ class SF3DModel:
 
 @app.function(
     image=image, volumes={CACHE_DIR: models_volume}, scaledown_window=2, timeout=60,
-    secrets=[modal.Secret.from_name("huggingface-secret", required=False),
-             modal.Secret.from_name("telegram-bot-secret", required=False)],
+    secrets=[
+        modal.Secret.from_name("huggingface-secret"),
+        modal.Secret.from_name("telegram-bot-secret"),
+    ],
 )
 @modal.asgi_app()
 def generate():
