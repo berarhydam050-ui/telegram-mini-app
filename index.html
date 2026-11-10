@@ -45,6 +45,7 @@ model-viewer{width:100%;height:320px;background:#0a1018;border-radius:12px;margi
 .gallery{display:grid;grid-template-columns:1fr 1fr;gap:10px}
 .empty-state{grid-column:1/-1;text-align:center;padding:36px 16px;color:var(--hint);background:var(--surface);border-radius:14px}
 .tip{font-size:.72rem;color:var(--hint);text-align:center;margin-top:20px}
+.debug-box{font-size:.7rem;color:var(--hint);background:rgba(0,0,0,.25);padding:8px;border-radius:8px;margin-top:10px;word-break:break-all}
 </style>
 </head>
 <body>
@@ -59,6 +60,7 @@ model-viewer{width:100%;height:320px;background:#0a1018;border-radius:12px;margi
 </div>
 <button id="generateBtn" class="btn-gen" onclick="generate3D()" disabled>Generate 3D Model</button>
 <div id="status"></div>
+<div id="debugBox" class="debug-box">Checking Telegram…</div>
 <model-viewer id="viewer" camera-controls auto-rotate shadow-intensity="1.2" exposure="1.1"></model-viewer>
 <div class="btn-row" id="actionButtons" style="display:none">
 <button class="btn-dl" onclick="downloadModel()">⬇ Download GLB</button>
@@ -85,171 +87,312 @@ model-viewer{width:100%;height:320px;background:#0a1018;border-radius:12px;margi
 
 <script>
 const tgApp = (window.Telegram && window.Telegram.WebApp) ? window.Telegram.WebApp : null;
-if (tgApp) { tgApp.ready(); tgApp.expand(); if (tgApp.setHeaderColor) try{tgApp.setHeaderColor("#17212b");}catch(e){} }
+if (tgApp) {
+  try {
+    tgApp.ready();
+    tgApp.expand();
+    if (tgApp.setHeaderColor) tgApp.setHeaderColor("#17212b");
+    if (tgApp.setBackgroundColor) tgApp.setBackgroundColor("#0e1621");
+  } catch (e) {}
+}
+
 const MODAL_BASE = "https://berarhydam050--sf3d-backend-generate.modal.run";
 let selectedBase64 = "", currentModelUrl = null, currentModelBlob = null, currentAssetId = null, currentPreview = null, userCredits = 0;
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-function setStatus(msg, type=""){const el=document.getElementById("status");el.innerHTML=msg;el.className=type;}
-function getInitData(){return (tgApp && tgApp.initData) ? tgApp.initData : "";}
-function publicGlbUrl(id){return UUID_RE.test(String(id||""))?MODAL_BASE+"/download/"+id:null;}
-function setCredits(n){userCredits=n;document.getElementById("creditCount").textContent="⚡ "+n;}
-
-async function refreshCredits(){
-  const initData=getInitData();
-  if(!initData){setCredits(0);return;}
-  try{
-    const res=await fetch(MODAL_BASE+"/credits?initData="+encodeURIComponent(initData));
-    const data=await res.json().catch(()=>({}));
-    setCredits(res.ok ? (Number(data.credits)||0) : 0);
-  }catch(e){setCredits(0);}
+function setStatus(msg, type=""){
+  const el = document.getElementById("status");
+  el.innerHTML = msg;
+  el.className = type;
 }
 
-function compressImage(file,maxSide=1600,q=0.92){
-  return new Promise((resolve,reject)=>{
-    const r=new FileReader();
-    r.onload=()=>{const img=new Image();img.onload=()=>{let w=img.width,h=img.height;if(w>maxSide||h>maxSide){if(w>h){h=Math.round(h*maxSide/w);w=maxSide;}else{w=Math.round(w*maxSide/h);h=maxSide;}}const c=document.createElement("canvas");c.width=w;c.height=h;c.getContext("2d").drawImage(img,0,0,w,h);resolve(c.toDataURL("image/jpeg",q));};img.onerror=()=>reject(new Error("Invalid image"));img.src=r.result;};
-    r.onerror=()=>reject(new Error("Read failed"));r.readAsDataURL(file);
+function getInitData(){
+  if (!tgApp) return "";
+  if (tgApp.initData && tgApp.initData.length > 10) return tgApp.initData;
+  return "";
+}
+
+function showDebug(){
+  const box = document.getElementById("debugBox");
+  if (!box) return;
+  const hasTg = !!tgApp;
+  const initLen = (tgApp && tgApp.initData) ? tgApp.initData.length : 0;
+  const hasUser = !!(tgApp && tgApp.initDataUnsafe && tgApp.initDataUnsafe.user);
+  const platform = tgApp ? (tgApp.platform || "?") : "none";
+  const version = tgApp ? (tgApp.version || "?") : "?";
+  box.innerHTML =
+    "TG: " + (hasTg ? "yes" : "NO") +
+    " | initData: " + initLen +
+    " chars | user: " + (hasUser ? "yes" : "no") +
+    " | " + platform + " v" + version;
+}
+
+function publicGlbUrl(id){
+  return UUID_RE.test(String(id||"")) ? MODAL_BASE + "/download/" + id : null;
+}
+
+function setCredits(n){
+  userCredits = n;
+  document.getElementById("creditCount").textContent = "⚡ " + n;
+}
+
+async function refreshCredits(){
+  const initData = getInitData();
+  if (!initData) { setCredits(0); return; }
+  try {
+    const res = await fetch(MODAL_BASE + "/credits?initData=" + encodeURIComponent(initData));
+    const data = await res.json().catch(() => ({}));
+    setCredits(res.ok ? (Number(data.credits) || 0) : 0);
+  } catch (e) { setCredits(0); }
+}
+
+function compressImage(file, maxSide=1600, q=0.92){
+  return new Promise((resolve, reject) => {
+    const r = new FileReader();
+    r.onload = () => {
+      const img = new Image();
+      img.onload = () => {
+        let w = img.width, h = img.height;
+        if (w > maxSide || h > maxSide) {
+          if (w > h) { h = Math.round(h * maxSide / w); w = maxSide; }
+          else { w = Math.round(w * maxSide / h); h = maxSide; }
+        }
+        const c = document.createElement("canvas");
+        c.width = w; c.height = h;
+        c.getContext("2d").drawImage(img, 0, 0, w, h);
+        resolve(c.toDataURL("image/jpeg", q));
+      };
+      img.onerror = () => reject(new Error("Invalid image"));
+      img.src = r.result;
+    };
+    r.onerror = () => reject(new Error("Read failed"));
+    r.readAsDataURL(file);
   });
 }
 
 async function handleFile(e){
-  const file=e.target.files[0];if(!file)return;
+  const file = e.target.files[0];
+  if (!file) return;
   setStatus('<span class="spinner"></span> Preparing…');
-  try{
-    selectedBase64=await compressImage(file);currentPreview=selectedBase64;
-    const img=document.getElementById("preview-img");img.src=selectedBase64;img.style.display="block";
-    document.getElementById("uploadPlaceholder").style.display="none";
+  try {
+    selectedBase64 = await compressImage(file);
+    currentPreview = selectedBase64;
+    const img = document.getElementById("preview-img");
+    img.src = selectedBase64;
+    img.style.display = "block";
+    document.getElementById("uploadPlaceholder").style.display = "none";
     document.getElementById("uploadZone").classList.add("has-image");
-    document.getElementById("generateBtn").disabled=false;
-    document.getElementById("viewer").style.display="none";
-    document.getElementById("actionButtons").style.display="none";
+    document.getElementById("generateBtn").disabled = false;
+    document.getElementById("viewer").style.display = "none";
+    document.getElementById("actionButtons").style.display = "none";
     setStatus("");
-  }catch(err){setStatus(err.message,"error");}
+  } catch (err) { setStatus(err.message, "error"); }
 }
 
-function modelFromBase64(b64){const b=atob(b64);const u=new Uint8Array(b.length);for(let i=0;i<b.length;i++)u[i]=b.charCodeAt(i);return new Blob([u],{type:"model/gltf-binary"});}
+function modelFromBase64(b64){
+  const b = atob(b64);
+  const u = new Uint8Array(b.length);
+  for (let i = 0; i < b.length; i++) u[i] = b.charCodeAt(i);
+  return new Blob([u], {type: "model/gltf-binary"});
+}
 
 async function createStarsPayment(productId){
-  const initData=getInitData();
-  if(!initData) throw new Error("Open inside Telegram to pay with Stars");
-  const res=await fetch(MODAL_BASE+"/pay/create",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({initData,product_id:productId})});
-  const data=await res.json().catch(()=>({}));
-  if(!res.ok) throw new Error(data.detail||"Could not create payment");
-  if(!data.invoice_url||!data.payment_id) throw new Error("Invalid payment response");
+  const initData = getInitData();
+  if (!initData) {
+    showDebug();
+    throw new Error("Open via https://t.me/Img_to_3dSf3dbot/sf3d");
+  }
+  const res = await fetch(MODAL_BASE + "/pay/create", {
+    method: "POST",
+    headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({initData, product_id: productId})
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.detail || "Could not create payment");
+  if (!data.invoice_url || !data.payment_id) throw new Error("Invalid payment response");
   return data;
 }
 
 function openInvoice(url){
-  return new Promise((resolve,reject)=>{
-    if(!tgApp||typeof tgApp.openInvoice!=="function"){reject(new Error("Telegram payments not available"));return;}
-    tgApp.openInvoice(url,s=>{if(s==="paid")resolve("paid");else if(s==="cancelled")reject(new Error("Payment cancelled"));else reject(new Error("Payment "+s));});
+  return new Promise((resolve, reject) => {
+    if (!tgApp || typeof tgApp.openInvoice !== "function") {
+      reject(new Error("Telegram payments not available"));
+      return;
+    }
+    tgApp.openInvoice(url, s => {
+      if (s === "paid") resolve("paid");
+      else if (s === "cancelled") reject(new Error("Payment cancelled"));
+      else reject(new Error("Payment " + s));
+    });
   });
 }
 
-async function waitUntilPaid(paymentId,maxMs=90000){
-  const t0=Date.now();
-  while(Date.now()-t0<maxMs){
-    const res=await fetch(MODAL_BASE+"/pay/"+paymentId);
-    const data=await res.json().catch(()=>({}));
-    if(data.status==="paid") return true;
-    await new Promise(r=>setTimeout(r,1500));
+async function waitUntilPaid(paymentId, maxMs=90000){
+  const t0 = Date.now();
+  while (Date.now() - t0 < maxMs) {
+    const res = await fetch(MODAL_BASE + "/pay/" + paymentId);
+    const data = await res.json().catch(() => ({}));
+    if (data.status === "paid") return true;
+    await new Promise(r => setTimeout(r, 1500));
   }
   throw new Error("Payment not confirmed yet");
 }
 
 async function buyPack(productId){
   setStatus('<span class="spinner"></span> Opening payment…');
-  try{
-    const pay=await createStarsPayment(productId);
+  try {
+    const pay = await createStarsPayment(productId);
     setStatus('<span class="spinner"></span> Confirm in Telegram…');
     await openInvoice(pay.invoice_url);
     setStatus('<span class="spinner"></span> Adding credits…');
     await waitUntilPaid(pay.payment_id);
     await refreshCredits();
-    setStatus("Balance top-up done · ⚡ "+userCredits,"success");
-  }catch(err){setStatus(err.message||"Payment failed","error");}
+    setStatus("Balance top-up done · ⚡ " + userCredits, "success");
+  } catch (err) {
+    setStatus(err.message || "Payment failed", "error");
+  }
 }
 
 async function postJob(imageData){
-  const res=await fetch(MODAL_BASE+"/",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({image:imageData,texture_resolution:2048,remesh:"none",return_base64:true,async:true,initData:getInitData()})});
-  const data=await res.json().catch(()=>({}));
-  if(!res.ok) throw new Error(data.detail||("HTTP "+res.status));
-  if(!data.job_id) throw new Error("No job id");
+  const res = await fetch(MODAL_BASE + "/", {
+    method: "POST",
+    headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({
+      image: imageData,
+      texture_resolution: 2048,
+      remesh: "none",
+      return_base64: true,
+      async: true,
+      initData: getInitData()
+    })
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.detail || ("HTTP " + res.status));
+  if (!data.job_id) throw new Error("No job id");
   return data.job_id;
 }
 
-async function pollJob(jobId,maxWaitMs=240000){
-  const t0=Date.now();let delay=2000;
-  while(Date.now()-t0<maxWaitMs){
-    await new Promise(r=>setTimeout(r,delay));delay=Math.min(delay+500,4000);
-    const res=await fetch(MODAL_BASE+"/job/"+jobId);
-    if(res.status===404){setStatus('<span class="spinner"></span> Waiting for GPU…');continue;}
-    const data=await res.json().catch(()=>({}));
-    if(data.status==="queued"||data.status==="running"){setStatus('<span class="spinner"></span> Generating…');continue;}
-    if(data.status==="error") throw new Error(data.error||"GPU error");
-    if(data.status==="done"||data.asset_id||data.model) return data;
+async function pollJob(jobId, maxWaitMs=240000){
+  const t0 = Date.now();
+  let delay = 2000;
+  while (Date.now() - t0 < maxWaitMs) {
+    await new Promise(r => setTimeout(r, delay));
+    delay = Math.min(delay + 500, 4000);
+    const res = await fetch(MODAL_BASE + "/job/" + jobId);
+    if (res.status === 404) {
+      setStatus('<span class="spinner"></span> Waiting for GPU…');
+      continue;
+    }
+    const data = await res.json().catch(() => ({}));
+    if (data.status === "queued" || data.status === "running") {
+      setStatus('<span class="spinner"></span> Generating…');
+      continue;
+    }
+    if (data.status === "error") throw new Error(data.error || "GPU error");
+    if (data.status === "done" || data.asset_id || data.model) return data;
   }
   throw new Error("Timed out");
 }
 
 async function generate3D(){
-  const btn=document.getElementById("generateBtn");
-  if(!selectedBase64){setStatus("Upload a photo first","error");return;}
+  const btn = document.getElementById("generateBtn");
+  if (!selectedBase64) { setStatus("Upload a photo first", "error"); return; }
   await refreshCredits();
-  if(userCredits<1){setStatus("No balance — top up below","error");return;}
-  btn.disabled=true;
-  try{
+  if (userCredits < 1) { setStatus("No balance — top up below", "error"); return; }
+  btn.disabled = true;
+  try {
     setStatus('<span class="spinner"></span> Starting GPU…');
-    const jobId=await postJob(selectedBase64);
+    const jobId = await postJob(selectedBase64);
     setStatus('<span class="spinner"></span> Generating 3D model…');
-    const data=await pollJob(jobId);
-    if(data.model){currentModelBlob=modelFromBase64(data.model);currentModelUrl=URL.createObjectURL(currentModelBlob);currentAssetId=data.asset_id||jobId;}
-    else if(data.asset_id){currentAssetId=data.asset_id;const glb=await fetch(publicGlbUrl(data.asset_id));currentModelBlob=await glb.blob();currentModelUrl=URL.createObjectURL(currentModelBlob);}
-    else throw new Error("No model returned");
-    const viewer=document.getElementById("viewer");viewer.src=currentModelUrl;viewer.style.display="block";document.getElementById("actionButtons").style.display="flex";
+    const data = await pollJob(jobId);
+    if (data.model) {
+      currentModelBlob = modelFromBase64(data.model);
+      currentModelUrl = URL.createObjectURL(currentModelBlob);
+      currentAssetId = data.asset_id || jobId;
+    } else if (data.asset_id) {
+      currentAssetId = data.asset_id;
+      const glb = await fetch(publicGlbUrl(data.asset_id));
+      currentModelBlob = await glb.blob();
+      currentModelUrl = URL.createObjectURL(currentModelBlob);
+    } else throw new Error("No model returned");
+    const viewer = document.getElementById("viewer");
+    viewer.src = currentModelUrl;
+    viewer.style.display = "block";
+    document.getElementById("actionButtons").style.display = "flex";
     await refreshCredits();
-    setStatus("Ready · ⚡ "+userCredits+" left","success");
-  }catch(err){setStatus(err.message||"Failed","error");}
-  finally{btn.disabled=false;}
+    setStatus("Ready · ⚡ " + userCredits + " left", "success");
+  } catch (err) {
+    setStatus(err.message || "Failed", "error");
+  } finally {
+    btn.disabled = false;
+  }
 }
 
 function downloadModel(){
-  if(!currentAssetId&&!currentModelBlob){setStatus("No model","error");return;}
-  const url=publicGlbUrl(currentAssetId);const name="form3d-"+(currentAssetId||"model")+".glb";
-  if(tgApp&&url&&tgApp.downloadFile){try{tgApp.downloadFile({url,file_name:name});setStatus("Download started","success");return;}catch(e){}}
-  if(url){if(tgApp&&tgApp.openLink)tgApp.openLink(url);else window.open(url,"_blank");setStatus("Opened file","success");return;}
-  setStatus("Could not download","error");
+  if (!currentAssetId && !currentModelBlob) { setStatus("No model", "error"); return; }
+  const url = publicGlbUrl(currentAssetId);
+  const name = "form3d-" + (currentAssetId || "model") + ".glb";
+  if (tgApp && url && tgApp.downloadFile) {
+    try { tgApp.downloadFile({url, file_name: name}); setStatus("Download started", "success"); return; } catch (e) {}
+  }
+  if (url) {
+    if (tgApp && tgApp.openLink) tgApp.openLink(url);
+    else window.open(url, "_blank");
+    setStatus("Opened file", "success");
+    return;
+  }
+  setStatus("Could not download", "error");
 }
 
-const GALLERY_KEY="form3d_gallery_v1";
-function loadGallery(){try{return JSON.parse(localStorage.getItem(GALLERY_KEY)||"[]");}catch{return[];}}
-function saveGallery(items){localStorage.setItem(GALLERY_KEY,JSON.stringify(items.slice(0,40)));}
+const GALLERY_KEY = "form3d_gallery_v1";
+function loadGallery(){ try { return JSON.parse(localStorage.getItem(GALLERY_KEY) || "[]"); } catch { return []; } }
+function saveGallery(items){ localStorage.setItem(GALLERY_KEY, JSON.stringify(items.slice(0, 40))); }
 function renderGallery(){
-  const items=loadGallery();const el=document.getElementById("gallery");
-  document.getElementById("galleryCount").textContent=items.length?items.length+" saved":"";
-  if(!items.length){el.innerHTML='<div class="empty-state">No models yet</div>';return;}
-  el.innerHTML=items.map((it,i)=>`<div style="background:var(--surface);border-radius:12px;overflow:hidden;cursor:pointer" onclick="openGalleryItem(${i})"><img src="${it.preview}" style="width:100%;height:110px;object-fit:cover"/><div style="padding:8px;font-size:.72rem;color:var(--hint)">${it.date}</div></div>`).join("");
+  const items = loadGallery();
+  const el = document.getElementById("gallery");
+  document.getElementById("galleryCount").textContent = items.length ? items.length + " saved" : "";
+  if (!items.length) { el.innerHTML = '<div class="empty-state">No models yet</div>'; return; }
+  el.innerHTML = items.map((it, i) =>
+    `<div style="background:var(--surface);border-radius:12px;overflow:hidden;cursor:pointer" onclick="openGalleryItem(${i})">` +
+    `<img src="${it.preview}" style="width:100%;height:110px;object-fit:cover"/>` +
+    `<div style="padding:8px;font-size:.72rem;color:var(--hint)">${it.date}</div></div>`
+  ).join("");
 }
 function saveToGallery(){
-  if(!currentPreview||!currentAssetId)return;
-  const items=loadGallery();
-  items.unshift({id:currentAssetId,preview:currentPreview,date:new Date().toLocaleDateString(undefined,{month:"short",day:"numeric"}),url:publicGlbUrl(currentAssetId)});
-  saveGallery(items);renderGallery();setStatus("Saved","success");
+  if (!currentPreview || !currentAssetId) return;
+  const items = loadGallery();
+  items.unshift({
+    id: currentAssetId,
+    preview: currentPreview,
+    date: new Date().toLocaleDateString(undefined, {month: "short", day: "numeric"}),
+    url: publicGlbUrl(currentAssetId)
+  });
+  saveGallery(items);
+  renderGallery();
+  setStatus("Saved", "success");
 }
 async function openGalleryItem(i){
-  const it=loadGallery()[i];if(!it)return;
+  const it = loadGallery()[i];
+  if (!it) return;
   setStatus('<span class="spinner"></span> Loading…');
-  try{
-    const res=await fetch(it.url||publicGlbUrl(it.id));const blob=await res.blob();
-    if(currentModelUrl)URL.revokeObjectURL(currentModelUrl);
-    currentModelBlob=blob;currentModelUrl=URL.createObjectURL(blob);currentAssetId=it.id;
-    const v=document.getElementById("viewer");v.src=currentModelUrl;v.style.display="block";document.getElementById("actionButtons").style.display="flex";
-    setStatus("Loaded","success");
-  }catch(e){setStatus(e.message,"error");}
+  try {
+    const res = await fetch(it.url || publicGlbUrl(it.id));
+    const blob = await res.blob();
+    if (currentModelUrl) URL.revokeObjectURL(currentModelUrl);
+    currentModelBlob = blob;
+    currentModelUrl = URL.createObjectURL(blob);
+    currentAssetId = it.id;
+    const v = document.getElementById("viewer");
+    v.src = currentModelUrl;
+    v.style.display = "block";
+    document.getElementById("actionButtons").style.display = "flex";
+    setStatus("Loaded", "success");
+  } catch (e) { setStatus(e.message, "error"); }
 }
+
 renderGallery();
 refreshCredits();
+showDebug();
 </script>
 </body>
 </html>
