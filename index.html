@@ -228,18 +228,48 @@ async function createStarsPayment(productId){
   return data;
 }
 
+function postTgEvent(eventType, eventData){
+  const payload = JSON.stringify(eventData || {});
+  try {
+    if (window.TelegramWebviewProxy && window.TelegramWebviewProxy.postEvent) {
+      window.TelegramWebviewProxy.postEvent(eventType, payload);
+      return "proxy";
+    }
+  } catch (e) {}
+  try {
+    if (window.external && "notify" in window.external) {
+      window.external.notify(JSON.stringify({eventType: eventType, eventData: eventData || {}}));
+      return "external";
+    }
+  } catch (e) {}
+  try {
+    if (window.parent && window.parent !== window) {
+      window.parent.postMessage(JSON.stringify({eventType: eventType, eventData: eventData || {}}), "*");
+      return "iframe";
+    }
+  } catch (e) {}
+  return "";
+}
+function invoiceSlug(url){
+  const m = String(url || "").match(/\/(?:\$|invoice\/)([A-Za-z0-9\-_=]+)/);
+  return m ? m[1] : "";
+}
 function openInvoice(url){
   return new Promise((resolve, reject) => {
     bindTg();
-    if (!tgApp || typeof tgApp.openInvoice !== "function") {
-      reject(new Error("Telegram payments not available"));
+    if (tgApp && typeof tgApp.openInvoice === "function") {
+      tgApp.openInvoice(url, s => {
+        if (s === "paid") resolve("paid");
+        else if (s === "cancelled") reject(new Error("Payment cancelled"));
+        else reject(new Error("Payment " + s));
+      });
       return;
     }
-    tgApp.openInvoice(url, s => {
-      if (s === "paid") resolve("paid");
-      else if (s === "cancelled") reject(new Error("Payment cancelled"));
-      else reject(new Error("Payment " + s));
-    });
+    const slug = invoiceSlug(url);
+    if (!slug) { reject(new Error("Invalid invoice link")); return; }
+    const via = postTgEvent("web_app_open_invoice", {slug: slug});
+    if (!via) { reject(new Error("Telegram payments not available")); return; }
+    resolve("opened");
   });
 }
 
@@ -259,9 +289,9 @@ async function buyPack(productId){
   try {
     const pay = await createStarsPayment(productId);
     setStatus('<span class="spinner"></span> Confirm in Telegram…');
-    await openInvoice(pay.invoice_url);
-    setStatus('<span class="spinner"></span> Adding credits…');
-    await waitUntilPaid(pay.payment_id);
+    const invoiceState = await openInvoice(pay.invoice_url);
+    setStatus('<span class="spinner"></span> ' + (invoiceState === "paid" ? "Adding credits…" : "Waiting for payment…"));
+    await waitUntilPaid(pay.payment_id, invoiceState === "paid" ? 90000 : 180000);
     await refreshCredits();
     setStatus("Balance top-up done · ⚡ " + userCredits, "success");
   } catch (err) {
