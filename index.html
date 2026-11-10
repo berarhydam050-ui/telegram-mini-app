@@ -86,8 +86,20 @@ model-viewer{width:100%;height:320px;background:#0a1018;border-radius:12px;margi
 </div>
 
 <script>
-const tgApp = (window.Telegram && window.Telegram.WebApp) ? window.Telegram.WebApp : null;
-if (tgApp) {
+function currentTg(){
+  return (window.Telegram && window.Telegram.WebApp) ? window.Telegram.WebApp : null;
+}
+function hashInitData(){
+  try {
+    const q = new URLSearchParams(String(location.hash || "").replace(/^#/, ""));
+    const raw = q.get("tgWebAppData") || "";
+    return raw.length > 10 ? raw : "";
+  } catch (e) { return ""; }
+}
+let tgApp = currentTg();
+function bindTg(){
+  tgApp = currentTg();
+  if (!tgApp) return;
   try {
     tgApp.ready();
     tgApp.expand();
@@ -95,6 +107,7 @@ if (tgApp) {
     if (tgApp.setBackgroundColor) tgApp.setBackgroundColor("#0e1621");
   } catch (e) {}
 }
+bindTg();
 
 const MODAL_BASE = "https://berarhydam050--sf3d-backend-generate.modal.run";
 let selectedBase64 = "", currentModelUrl = null, currentModelBlob = null, currentAssetId = null, currentPreview = null, userCredits = 0;
@@ -107,18 +120,20 @@ function setStatus(msg, type=""){
 }
 
 function getInitData(){
-  if (!tgApp) return "";
-  if (tgApp.initData && tgApp.initData.length > 10) return tgApp.initData;
-  return "";
+  bindTg();
+  if (tgApp && tgApp.initData && tgApp.initData.length > 10) return tgApp.initData;
+  return hashInitData();
 }
 
 function showDebug(){
   const box = document.getElementById("debugBox");
   if (!box) return;
-  const hasTg = !!tgApp;
-  const initLen = (tgApp && tgApp.initData) ? tgApp.initData.length : 0;
-  const hasUser = !!(tgApp && tgApp.initDataUnsafe && tgApp.initDataUnsafe.user);
-  const platform = tgApp ? (tgApp.platform || "?") : "none";
+  bindTg();
+  const fromHash = hashInitData();
+  const hasTg = !!tgApp || fromHash.length > 10;
+  const initLen = (tgApp && tgApp.initData && tgApp.initData.length) ? tgApp.initData.length : fromHash.length;
+  const hasUser = !!(tgApp && tgApp.initDataUnsafe && tgApp.initDataUnsafe.user) || fromHash.indexOf("user=") >= 0;
+  const platform = tgApp ? (tgApp.platform || "?") : (fromHash ? "hash" : "none");
   const version = tgApp ? (tgApp.version || "?") : "?";
   box.innerHTML =
     "TG: " + (hasTg ? "yes" : "NO") +
@@ -215,6 +230,7 @@ async function createStarsPayment(productId){
 
 function openInvoice(url){
   return new Promise((resolve, reject) => {
+    bindTg();
     if (!tgApp || typeof tgApp.openInvoice !== "function") {
       reject(new Error("Telegram payments not available"));
       return;
@@ -329,6 +345,7 @@ async function generate3D(){
 }
 
 function downloadModel(){
+  bindTg();
   if (!currentAssetId && !currentModelBlob) { setStatus("No model", "error"); return; }
   const url = publicGlbUrl(currentAssetId);
   const name = "form3d-" + (currentAssetId || "model") + ".glb";
@@ -393,6 +410,7 @@ async function openGalleryItem(i){
 renderGallery();
 refreshCredits();
 showDebug();
+setTimeout(function(){ bindTg(); showDebug(); refreshCredits(); }, 500);
 </script>
 </body>
 </html>
