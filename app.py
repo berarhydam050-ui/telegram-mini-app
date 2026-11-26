@@ -174,9 +174,15 @@ def user_has_active_job(user_id: int) -> bool:
 
 
 @app.cls(
-    image=image, gpu="L4", volumes={CACHE_DIR: models_volume}, scaledown_window=300,
-    enable_memory_snapshot=True, experimental_options={"enable_gpu_snapshot": True},
-    secrets=[modal.Secret.from_name("huggingface-secret")], timeout=900, max_containers=1,
+    image=image,
+    gpu=["L4", "A10G"],
+    volumes={CACHE_DIR: models_volume},
+    scaledown_window=120,
+    enable_memory_snapshot=True,
+    experimental_options={"enable_gpu_snapshot": True},
+    secrets=[modal.Secret.from_name("huggingface-secret")],
+    timeout=900,
+    max_containers=2,
 )
 class SF3DModel:
     @modal.enter(snap=True)
