@@ -152,27 +152,6 @@ def consume_credit(user_id: int):
     return u
 
 
-def user_has_active_job(user_id: int) -> bool:
-    """Return True if this user already has a queued/running job (prevents spam)."""
-    try:
-        models_volume.reload()
-    except Exception:
-        pass
-    jobs_dir = Path(CACHE_DIR) / "jobs"
-    if not jobs_dir.is_dir():
-        return False
-    # Check recent job files (last ~50 by mtime is enough)
-    files = sorted(jobs_dir.glob("*.json"), key=lambda p: p.stat().st_mtime, reverse=True)[:50]
-    for f in files:
-        try:
-            data = json.loads(f.read_text())
-        except Exception:
-            continue
-        if data.get("user_id") == int(user_id) and data.get("status") in ("queued", "running"):
-            return True
-    return False
-
-
 @app.cls(
     image=image,
     gpu=["L4", "A10G"],
@@ -473,9 +452,6 @@ def generate():
                     tg_user_id = int(u["id"])
                 except Exception:
                     pass
-            if tg_user_id and user_has_active_job(tg_user_id):
-                raise HTTPException(429, "You already have a generation in progress. Wait for it to finish.")
-
             job_id = str(uuid.uuid4())
             data["job_id"] = job_id
             if tg_user_id:
