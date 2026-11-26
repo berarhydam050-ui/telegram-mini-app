@@ -1,1 +1,457 @@
-PLACEHOLDER_WILL_REPLACE
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no"/>
+<title>Form3D — Image to 3D Pro</title>
+<script src="https://telegram.org/js/telegram-web-app.js"></script>
+<script type="module" src="https://ajax.googleapis.com/ajax/libs/model-viewer/3.4.0/model-viewer.min.js"></script>
+<style>
+:root{--bg:#0e1621;--surface:#17212b;--text:#f5f5f5;--hint:#8b9aab;--green:#31b545;--green-dark:#28a03c;--primary:#2AABEE;--border:rgba(255,255,255,.08);--danger:#e53935;--radius:16px}
+*{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent}
+body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;background:var(--bg);color:var(--text);min-height:100vh;padding:0 0 48px}
+.header{padding:18px 16px 14px;text-align:center;background:var(--surface);border-bottom:1px solid var(--border)}
+.header h1{font-size:1.35rem;font-weight:700}
+.header p{font-size:.8rem;color:var(--hint);margin-top:4px}
+.container{max-width:420px;margin:0 auto;padding:14px}
+.card{background:var(--surface);border-radius:var(--radius);padding:16px;margin-bottom:14px}
+.balance-row{display:flex;align-items:center;justify-content:space-between;margin-bottom:14px}
+.balance-row .label{color:var(--hint);font-size:.85rem}
+.balance-row .val{font-size:1.1rem;font-weight:700;color:#f5d565}
+.upload-zone{border:1.5px dashed rgba(255,255,255,.12);border-radius:14px;padding:28px 14px;text-align:center;min-height:160px;display:flex;flex-direction:column;align-items:center;justify-content:center;position:relative;cursor:pointer;background:rgba(0,0,0,.15)}
+.upload-zone.has-image{border-style:solid;padding:10px}
+.upload-zone input{position:absolute;inset:0;opacity:0;cursor:pointer;z-index:20}
+#preview-img{max-width:100%;max-height:220px;border-radius:10px;display:none;object-fit:contain;z-index:10}
+.btn-gen{display:flex;align-items:center;justify-content:center;width:100%;padding:14px;margin-top:12px;border:none;border-radius:12px;background:var(--primary);color:#fff;font-size:.95rem;font-weight:650;cursor:pointer}
+.btn-gen:disabled{opacity:.4;cursor:not-allowed;background:#3a4a5a}
+.btn-row{display:flex;gap:10px;margin-top:12px}
+.btn-row button{flex:1;padding:12px;border-radius:12px;border:none;font-weight:650;cursor:pointer}
+.btn-dl{background:var(--primary);color:#fff}
+.btn-save{background:rgba(255,255,255,.06);color:#fff;border:1px solid var(--border)!important}
+#status{margin-top:12px;font-size:.84rem;color:var(--hint);text-align:center;min-height:22px}
+#status.success{color:#4caf50}#status.error{color:var(--danger)}
+model-viewer{width:100%;height:320px;background:#0a1018;border-radius:12px;margin-top:12px;display:none}
+.shop-title{font-weight:700;font-size:.95rem;margin-bottom:4px}
+.shop-sub{font-size:.75rem;color:var(--hint);margin-bottom:12px}
+.pack-full{display:block;width:100%;padding:14px;margin-bottom:10px;border:none;border-radius:12px;background:var(--green);color:#fff;font-size:.92rem;font-weight:700;text-align:center;cursor:pointer}
+.pack-full:active{background:var(--green-dark)}
+.pack-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.pack-btn{padding:14px 10px;border:none;border-radius:12px;background:var(--green);color:#fff;font-weight:700;font-size:.88rem;cursor:pointer;text-align:center}
+.pack-btn:active{background:var(--green-dark)}
+.pack-btn .sub{display:block;font-size:.72rem;font-weight:500;opacity:.9;margin-top:2px}
+.spinner{display:inline-block;width:14px;height:14px;border:2px solid rgba(255,255,255,.2);border-top-color:#fff;border-radius:50%;animation:spin .6s linear infinite;margin-right:6px;vertical-align:middle}
+@keyframes spin{to{transform:rotate(360deg)}}
+.section-header{display:flex;justify-content:space-between;margin:28px 0 12px;padding:0 2px}
+.gallery{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.empty-state{grid-column:1/-1;text-align:center;padding:36px 16px;color:var(--hint);background:var(--surface);border-radius:14px}
+.tip{font-size:.72rem;color:var(--hint);text-align:center;margin-top:20px}
+.debug-box{font-size:.7rem;color:var(--hint);background:rgba(0,0,0,.25);padding:8px;border-radius:8px;margin-top:10px;word-break:break-all}
+</style>
+</head>
+<body>
+<div class="header"><h1>Form3D Studio</h1><p>Photo → 3D model · pay with Telegram Stars</p></div>
+<div class="container">
+
+<div class="card">
+<div class="balance-row"><span class="label">Balance</span><span class="val" id="creditCount">⚡ 0</span></div>
+<div class="upload-zone" id="uploadZone">
+<div id="uploadPlaceholder"><div style="font-size:1.8rem;margin-bottom:8px">📷</div><div style="font-weight:600">Tap to upload a photo</div><div style="font-size:.75rem;color:var(--hint);margin-top:4px">PNG or JPG</div></div>
+<img id="preview-img" alt="Preview"/><input type="file" id="fileInput" accept="image/*" onchange="handleFile(event)"/>
+</div>
+<button id="generateBtn" class="btn-gen" onclick="generate3D()" disabled>Generate 3D Model</button>
+<div id="status"></div>
+<div id="debugBox" class="debug-box">Checking Telegram…</div>
+<model-viewer id="viewer" camera-controls auto-rotate shadow-intensity="1.2" exposure="1.1"></model-viewer>
+<div class="btn-row" id="actionButtons" style="display:none">
+<button class="btn-dl" onclick="downloadModel()">⬇ Download GLB</button>
+<button class="btn-save" onclick="saveToGallery()">★ Save</button>
+</div>
+</div>
+
+<div class="card">
+<div class="shop-title">Top up balance</div>
+<div class="shop-sub">1 ⚡ = 1 model · one-time, no subscription</div>
+<button class="pack-full" onclick="buyPack('first')">🎁 First purchase: 10 ⚡ for 80 ⭐</button>
+<div class="pack-grid">
+<button class="pack-btn" onclick="buyPack('p3')">3 ⚡ · 50 ⭐</button>
+<button class="pack-btn" onclick="buyPack('p10')">10 ⚡ · 150 ⭐</button>
+<button class="pack-btn" onclick="buyPack('p30')">30 ⚡ · 390 ⭐</button>
+<button class="pack-btn" onclick="buyPack('p100')">100 ⚡ · 990 ⭐</button>
+</div>
+</div>
+
+<div class="section-header"><h2 style="font-size:1rem">My Gallery</h2><span id="galleryCount" style="color:var(--hint);font-size:.8rem"></span></div>
+<div class="gallery" id="gallery"></div>
+<p class="tip">Paid with Telegram Stars · no auto-renewal</p>
+</div>
+
+<script>
+function currentTg(){
+  return (window.Telegram && window.Telegram.WebApp) ? window.Telegram.WebApp : null;
+}
+function hashInitData(){
+  try {
+    const q = new URLSearchParams(String(location.hash || "").replace(/^#/, ""));
+    const raw = q.get("tgWebAppData") || "";
+    return raw.length > 10 ? raw : "";
+  } catch (e) { return ""; }
+}
+let tgApp = currentTg();
+function bindTg(){
+  tgApp = currentTg();
+  if (!tgApp) return;
+  try {
+    tgApp.ready();
+    tgApp.expand();
+    if (tgApp.setHeaderColor) tgApp.setHeaderColor("#17212b");
+    if (tgApp.setBackgroundColor) tgApp.setBackgroundColor("#0e1621");
+  } catch (e) {}
+}
+bindTg();
+
+const MODAL_BASE = "https://berarhydam050--sf3d-backend-generate.modal.run";
+let selectedBase64 = "", currentModelUrl = null, currentModelBlob = null, currentAssetId = null, currentPreview = null, userCredits = 0;
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+function setStatus(msg, type=""){
+  const el = document.getElementById("status");
+  el.innerHTML = msg;
+  el.className = type;
+}
+
+function getInitData(){
+  bindTg();
+  if (tgApp && tgApp.initData && tgApp.initData.length > 10) return tgApp.initData;
+  return hashInitData();
+}
+
+function showDebug(){
+  const box = document.getElementById("debugBox");
+  if (!box) return;
+  bindTg();
+  const fromHash = hashInitData();
+  const hasTg = !!tgApp || fromHash.length > 10;
+  const initLen = (tgApp && tgApp.initData && tgApp.initData.length) ? tgApp.initData.length : fromHash.length;
+  const hasUser = !!(tgApp && tgApp.initDataUnsafe && tgApp.initDataUnsafe.user) || fromHash.indexOf("user=") >= 0;
+  const platform = tgApp ? (tgApp.platform || "?") : (fromHash ? "hash" : "none");
+  const version = tgApp ? (tgApp.version || "?") : "?";
+  box.innerHTML =
+    "TG: " + (hasTg ? "yes" : "NO") +
+    " | initData: " + initLen +
+    " chars | user: " + (hasUser ? "yes" : "no") +
+    " | " + platform + " v" + version;
+}
+
+function publicGlbUrl(id){
+  return UUID_RE.test(String(id||"")) ? MODAL_BASE + "/download/" + id : null;
+}
+
+let isFreeUser = false;
+function setCredits(n, free=false){
+  userCredits = n;
+  isFreeUser = !!free;
+  const el = document.getElementById("creditCount");
+  if (isFreeUser) {
+    el.textContent = "⚡ Unlimited";
+  } else {
+    el.textContent = "⚡ " + n;
+  }
+}
+
+async function refreshCredits(){
+  const initData = getInitData();
+  if (!initData) { setCredits(0, false); return; }
+  try {
+    const res = await fetch(MODAL_BASE + "/credits?initData=" + encodeURIComponent(initData));
+    const data = await res.json().catch(() => ({}));
+    if (res.ok) {
+      setCredits(Number(data.credits) || 0, !!data.free);
+    } else {
+      setCredits(0, false);
+    }
+  } catch (e) { setCredits(0, false); }
+}
+
+function compressImage(file, maxSide=1600, q=0.92){
+  return new Promise((resolve, reject) => {
+    const r = new FileReader();
+    r.onload = () => {
+      const img = new Image();
+      img.onload = () => {
+        let w = img.width, h = img.height;
+        if (w > maxSide || h > maxSide) {
+          if (w > h) { h = Math.round(h * maxSide / w); w = maxSide; }
+          else { w = Math.round(w * maxSide / h); h = maxSide; }
+        }
+        const c = document.createElement("canvas");
+        c.width = w; c.height = h;
+        c.getContext("2d").drawImage(img, 0, 0, w, h);
+        resolve(c.toDataURL("image/jpeg", q));
+      };
+      img.onerror = () => reject(new Error("Invalid image"));
+      img.src = r.result;
+    };
+    r.onerror = () => reject(new Error("Read failed"));
+    r.readAsDataURL(file);
+  });
+}
+
+async function handleFile(e){
+  const file = e.target.files[0];
+  if (!file) return;
+  setStatus('<span class="spinner"></span> Preparing…');
+  try {
+    selectedBase64 = await compressImage(file);
+    currentPreview = selectedBase64;
+    const img = document.getElementById("preview-img");
+    img.src = selectedBase64;
+    img.style.display = "block";
+    document.getElementById("uploadPlaceholder").style.display = "none";
+    document.getElementById("uploadZone").classList.add("has-image");
+    document.getElementById("generateBtn").disabled = false;
+    document.getElementById("viewer").style.display = "none";
+    document.getElementById("actionButtons").style.display = "none";
+    setStatus("");
+  } catch (err) { setStatus(err.message, "error"); }
+}
+
+function modelFromBase64(b64){
+  const b = atob(b64);
+  const u = new Uint8Array(b.length);
+  for (let i = 0; i < b.length; i++) u[i] = b.charCodeAt(i);
+  return new Blob([u], {type: "model/gltf-binary"});
+}
+
+async function createStarsPayment(productId){
+  const initData = getInitData();
+  if (!initData) {
+    showDebug();
+    throw new Error("Open via https://t.me/Img_to_3dSf3dbot/sf3d");
+  }
+  const res = await fetch(MODAL_BASE + "/pay/create", {
+    method: "POST",
+    headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({initData, product_id: productId})
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.detail || "Could not create payment");
+  if (!data.invoice_url || !data.payment_id) throw new Error("Invalid payment response");
+  return data;
+}
+
+function postTgEvent(eventType, eventData){
+  const payload = JSON.stringify(eventData || {});
+  try {
+    if (window.TelegramWebviewProxy && window.TelegramWebviewProxy.postEvent) {
+      window.TelegramWebviewProxy.postEvent(eventType, payload);
+      return "proxy";
+    }
+  } catch (e) {}
+  try {
+    if (window.external && "notify" in window.external) {
+      window.external.notify(JSON.stringify({eventType: eventType, eventData: eventData || {}}));
+      return "external";
+    }
+  } catch (e) {}
+  try {
+    if (window.parent && window.parent !== window) {
+      window.parent.postMessage(JSON.stringify({eventType: eventType, eventData: eventData || {}}), "*");
+      return "iframe";
+    }
+  } catch (e) {}
+  return "";
+}
+function invoiceSlug(url){
+  const m = String(url || "").match(/\/(?:\$|invoice\/)([A-Za-z0-9\-_=]+)/);
+  return m ? m[1] : "";
+}
+function openInvoice(url){
+  return new Promise((resolve, reject) => {
+    bindTg();
+    if (tgApp && typeof tgApp.openInvoice === "function") {
+      tgApp.openInvoice(url, s => {
+        if (s === "paid") resolve("paid");
+        else if (s === "cancelled") reject(new Error("Payment cancelled"));
+        else reject(new Error("Payment " + s));
+      });
+      return;
+    }
+    const slug = invoiceSlug(url);
+    if (!slug) { reject(new Error("Invalid invoice link")); return; }
+    const via = postTgEvent("web_app_open_invoice", {slug: slug});
+    if (!via) { reject(new Error("Telegram payments not available")); return; }
+    resolve("opened");
+  });
+}
+
+async function waitUntilPaid(paymentId, maxMs=90000){
+  const t0 = Date.now();
+  while (Date.now() - t0 < maxMs) {
+    const res = await fetch(MODAL_BASE + "/pay/" + paymentId);
+    const data = await res.json().catch(() => ({}));
+    if (data.status === "paid") return true;
+    await new Promise(r => setTimeout(r, 1500));
+  }
+  throw new Error("Payment not confirmed yet");
+}
+
+async function buyPack(productId){
+  setStatus('<span class="spinner"></span> Opening payment…');
+  try {
+    const pay = await createStarsPayment(productId);
+    setStatus('<span class="spinner"></span> Confirm in Telegram…');
+    const invoiceState = await openInvoice(pay.invoice_url);
+    setStatus('<span class="spinner"></span> ' + (invoiceState === "paid" ? "Adding credits…" : "Waiting for payment…"));
+    await waitUntilPaid(pay.payment_id, invoiceState === "paid" ? 90000 : 180000);
+    await refreshCredits();
+    setStatus("Balance top-up done · ⚡ " + userCredits, "success");
+  } catch (err) {
+    setStatus(err.message || "Payment failed", "error");
+  }
+}
+
+async function postJob(imageData){
+  const res = await fetch(MODAL_BASE + "/", {
+    method: "POST",
+    headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({
+      image: imageData,
+      texture_resolution: 2048,
+      remesh: "none",
+      return_base64: true,
+      async: true,
+      initData: getInitData()
+    })
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.detail || ("HTTP " + res.status));
+  if (!data.job_id) throw new Error("No job id");
+  return data.job_id;
+}
+
+async function pollJob(jobId, maxWaitMs=240000){
+  const t0 = Date.now();
+  let delay = 2000;
+  while (Date.now() - t0 < maxWaitMs) {
+    await new Promise(r => setTimeout(r, delay));
+    delay = Math.min(delay + 500, 4000);
+    const res = await fetch(MODAL_BASE + "/job/" + jobId);
+    if (res.status === 404) {
+      setStatus('<span class="spinner"></span> Waiting for GPU…');
+      continue;
+    }
+    const data = await res.json().catch(() => ({}));
+    if (data.status === "queued" || data.status === "running") {
+      setStatus('<span class="spinner"></span> Generating…');
+      continue;
+    }
+    if (data.status === "error") throw new Error(data.error || "GPU error");
+    if (data.status === "done" || data.asset_id || data.model) return data;
+  }
+  throw new Error("Timed out");
+}
+
+async function generate3D(){
+  const btn = document.getElementById("generateBtn");
+  if (!selectedBase64) { setStatus("Upload a photo first", "error"); return; }
+  await refreshCredits();
+  if (!isFreeUser && userCredits < 1) { setStatus("No balance — top up below", "error"); return; }
+  btn.disabled = true;
+  try {
+    setStatus('<span class="spinner"></span> Starting GPU…');
+    const jobId = await postJob(selectedBase64);
+    setStatus('<span class="spinner"></span> Generating 3D model…');
+    const data = await pollJob(jobId);
+    if (data.model) {
+      currentModelBlob = modelFromBase64(data.model);
+      currentModelUrl = URL.createObjectURL(currentModelBlob);
+      currentAssetId = data.asset_id || jobId;
+    } else if (data.asset_id) {
+      currentAssetId = data.asset_id;
+      const glb = await fetch(publicGlbUrl(data.asset_id));
+      currentModelBlob = await glb.blob();
+      currentModelUrl = URL.createObjectURL(currentModelBlob);
+    } else throw new Error("No model returned");
+    const viewer = document.getElementById("viewer");
+    viewer.src = currentModelUrl;
+    viewer.style.display = "block";
+    document.getElementById("actionButtons").style.display = "flex";
+    await refreshCredits();
+    setStatus(isFreeUser ? "Ready · Unlimited free" : ("Ready · ⚡ " + userCredits + " left"), "success");
+  } catch (err) {
+    setStatus(err.message || "Failed", "error");
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+function downloadModel(){
+  bindTg();
+  if (!currentAssetId && !currentModelBlob) { setStatus("No model", "error"); return; }
+  const url = publicGlbUrl(currentAssetId);
+  const name = "form3d-" + (currentAssetId || "model") + ".glb";
+  if (tgApp && url && tgApp.downloadFile) {
+    try { tgApp.downloadFile({url, file_name: name}); setStatus("Download started", "success"); return; } catch (e) {}
+  }
+  if (url) {
+    if (tgApp && tgApp.openLink) tgApp.openLink(url);
+    else window.open(url, "_blank");
+    setStatus("Opened file", "success");
+    return;
+  }
+  setStatus("Could not download", "error");
+}
+
+const GALLERY_KEY = "form3d_gallery_v1";
+function loadGallery(){ try { return JSON.parse(localStorage.getItem(GALLERY_KEY) || "[]"); } catch { return []; } }
+function saveGallery(items){ localStorage.setItem(GALLERY_KEY, JSON.stringify(items.slice(0, 40))); }
+function renderGallery(){
+  const items = loadGallery();
+  const el = document.getElementById("gallery");
+  document.getElementById("galleryCount").textContent = items.length ? items.length + " saved" : "";
+  if (!items.length) { el.innerHTML = '<div class="empty-state">No models yet</div>'; return; }
+  el.innerHTML = items.map((it, i) =>
+    `<div style="background:var(--surface);border-radius:12px;overflow:hidden;cursor:pointer" onclick="openGalleryItem(${i})">` +
+    `<img src="${it.preview}" style="width:100%;height:110px;object-fit:cover"/>` +
+    `<div style="padding:8px;font-size:.72rem;color:var(--hint)">${it.date}</div></div>`
+  ).join("");
+}
+function saveToGallery(){
+  if (!currentPreview || !currentAssetId) return;
+  const items = loadGallery();
+  items.unshift({
+    id: currentAssetId,
+    preview: currentPreview,
+    date: new Date().toLocaleDateString(undefined, {month: "short", day: "numeric"}),
+    url: publicGlbUrl(currentAssetId)
+  });
+  saveGallery(items);
+  renderGallery();
+  setStatus("Saved", "success");
+}
+async function openGalleryItem(i){
+  const it = loadGallery()[i];
+  if (!it) return;
+  setStatus('<span class="spinner"></span> Loading…');
+  try {
+    const res = await fetch(it.url || publicGlbUrl(it.id));
+    const blob = await res.blob();
+    if (currentModelUrl) URL.revokeObjectURL(currentModelUrl);
+    currentModelBlob = blob;
+    currentModelUrl = URL.createObjectURL(blob);
+    currentAssetId = it.id;
+    const v = document.getElementById("viewer");
+    v.src = currentModelUrl;
+    v.style.display = "block";
+    document.getElementById("actionButtons").style.display = "flex";
+    setStatus("Loaded", "success");
+  } catch (e) { setStatus(e.message, "error"); }
+}
+
+renderGallery();
+refreshCredits();
+showDebug();
+setTimeout(function(){ bindTg(); showDebug(); refreshCredits(); }, 500);
+</script>
+</body>
+</html>
