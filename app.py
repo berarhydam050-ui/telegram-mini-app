@@ -168,6 +168,24 @@ class SF3DModel:
     def load_model(self):
         import torch
         from huggingface_hub import login
+        # Image torch does not export these from torch.amp; SF3D imports them there.
+        root = Path("/app/stable-fast-3d")
+        if root.is_dir():
+            for path in root.rglob("*.py"):
+                try:
+                    src = path.read_text()
+                except Exception:
+                    continue
+                patched = src.replace(
+                    "from torch.amp import custom_bwd, custom_fwd",
+                    "from torch.cuda.amp import custom_bwd, custom_fwd",
+                ).replace(
+                    "from torch.amp import custom_fwd, custom_bwd",
+                    "from torch.cuda.amp import custom_fwd, custom_bwd",
+                )
+                if patched != src:
+                    path.write_text(patched)
+                    print("Patched AMP import", path)
         if not torch.cuda.is_available():
             raise RuntimeError("CUDA unavailable")
         self.device = torch.device(GPU_DEVICE)
