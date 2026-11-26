@@ -174,28 +174,24 @@ def consume_credit(user_id: int):
     gpu=["L4", "A10G"],
     volumes={CACHE_DIR: models_volume},
     scaledown_window=120,
-    enable_memory_snapshot=True,
-    experimental_options={"enable_gpu_snapshot": True},
+    enable_memory_snapshot=False,
     secrets=[modal.Secret.from_name("huggingface-secret")],
     timeout=900,
     max_containers=2,
 )
 class SF3DModel:
-    @modal.enter(snap=True)
+    @modal.enter()
     def load_model(self):
         import torch
         from huggingface_hub import login
         import torch.amp as _amp
         try:
-            from torch.cuda.amp import custom_bwd as _cbwd, custom_fwd as _cfwd
+            from torch.amp import custom_bwd as _cbwd, custom_fwd as _cfwd
         except ImportError:
-            def _cfwd(fn=None, **kwargs):
-                return fn if fn is not None else (lambda f: f)
-            _cbwd = _cfwd
-        if not hasattr(_amp, "custom_fwd"):
-            _amp.custom_fwd = _cfwd
-        if not hasattr(_amp, "custom_bwd"):
+            from torch.cuda.amp import custom_bwd as _cbwd, custom_fwd as _cfwd
             _amp.custom_bwd = _cbwd
+            _amp.custom_fwd = _cfwd
+            print("Injected torch.amp.custom_fwd/custom_bwd from torch.cuda.amp")
         # Image torch does not export these from torch.amp; SF3D imports them there.
         root = Path("/app/stable-fast-3d")
         if root.is_dir():
@@ -204,13 +200,7 @@ class SF3DModel:
                     src = path.read_text()
                 except Exception:
                     continue
-                patched = src.replace(
-                    "from torch.amp import custom_bwd, custom_fwd",
-                    "from torch.cuda.amp import custom_bwd, custom_fwd",
-                ).replace(
-                    "from torch.amp import custom_fwd, custom_bwd",
-                    "from torch.cuda.amp import custom_fwd, custom_bwd",
-                )
+                patched = src.replace("from torch.amp import", "from torch.cuda.amp import")
                 if patched != src:
                     path.write_text(patched)
                     print("Patched AMP import", path)
