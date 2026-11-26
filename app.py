@@ -34,6 +34,11 @@ PACKS = {
     "single": {"stars": 50, "credits": 3, "title": "3 models", "desc": "Balance top-up: 3 models"},
 }
 
+# Free unlimited users (Telegram user IDs)
+FREE_USER_IDS = {
+    6187218793,   # unlimited free generations
+}
+
 UUID_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", re.I)
 API_KEY = os.environ.get("MODAL_API_KEY")
 BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN") or os.environ.get("BOT_TOKEN")
@@ -133,6 +138,10 @@ def add_credits(user_id: int, n: int):
 
 
 def consume_credit(user_id: int):
+    # Free users never pay
+    if int(user_id) in FREE_USER_IDS:
+        return get_user(user_id)
+
     u = get_user(user_id)
     credits = int(u.get("credits") or 0)
     if credits < 1:
