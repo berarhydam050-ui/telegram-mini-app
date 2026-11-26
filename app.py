@@ -45,24 +45,7 @@ BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN") or os.environ.get("BOT_TOKEN")
 
 app = modal.App(APP_NAME)
 models_volume = modal.Volume.from_name(VOLUME_NAME, create_if_missing=True)
-image = (
-    modal.Image.from_registry("rhydam12/sf3d-gpu-worker:latest", add_python="3.10")
-    .pip_install("httpx")
-    .run_commands(
-        "python - <<'PY'\n"
-        "from pathlib import Path\n"
-        "root = Path('/app/stable-fast-3d')\n"
-        "if root.is_dir():\n"
-        "    for path in root.rglob('*.py'):\n"
-        "        text = path.read_text(errors='ignore')\n"
-        "        patched = text.replace('from torch.amp import custom_bwd, custom_fwd', 'from torch.cuda.amp import custom_bwd, custom_fwd')\n"
-        "        patched = patched.replace('from torch.amp import custom_fwd, custom_bwd', 'from torch.cuda.amp import custom_fwd, custom_bwd')\n"
-        "        if patched != text:\n"
-        "            path.write_text(patched)\n"
-        "            print('patched', path)\n"
-        "PY"
-    )
-)
+image = modal.Image.from_registry("rhydam12/sf3d-gpu-worker:latest", add_python="3.10").pip_install("httpx")
 
 
 def decode_image(data: Any):
@@ -177,7 +160,7 @@ def consume_credit(user_id: int):
     enable_memory_snapshot=False,
     secrets=[modal.Secret.from_name("huggingface-secret")],
     timeout=900,
-    max_containers=2,
+    max_containers=1,
 )
 class SF3DModel:
     @modal.enter()
@@ -185,25 +168,18 @@ class SF3DModel:
         import torch
         from huggingface_hub import login
         import torch.amp as _amp
-        try:
-            from torch.amp import custom_bwd as _cbwd, custom_fwd as _cfwd
-        except ImportError:
-            from torch.cuda.amp import custom_bwd as _cbwd, custom_fwd as _cfwd
-            _amp.custom_bwd = _cbwd
-            _amp.custom_fwd = _cfwd
-            print("Injected torch.amp.custom_fwd/custom_bwd from torch.cuda.amp")
-        # Image torch does not export these from torch.amp; SF3D imports them there.
-        root = Path("/app/stable-fast-3d")
-        if root.is_dir():
-            for path in root.rglob("*.py"):
-                try:
-                    src = path.read_text()
-                except Exception:
-                    continue
-                patched = src.replace("from torch.amp import", "from torch.cuda.amp import")
-                if patched != src:
-                    path.write_text(patched)
-                    print("Patched AMP import", path)
+        import torch.cuda.amp as _camp
+
+        def _drop_device_type(fn):
+            def wrapped(*args, **kwargs):
+                kwargs.pop("device_type", None)
+                return fn(*args, **kwargs)
+            return wrapped
+
+        _camp.custom_fwd = _drop_device_type(_camp.custom_fwd)
+        _camp.custom_bwd = _drop_device_type(_camp.custom_bwd)
+        _amp.custom_fwd = _camp.custom_fwd
+        _amp.custom_bwd = _camp.custom_bwd
         if not torch.cuda.is_available():
             raise RuntimeError("CUDA unavailable")
         self.device = torch.device(GPU_DEVICE)
