@@ -45,7 +45,24 @@ BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN") or os.environ.get("BOT_TOKEN")
 
 app = modal.App(APP_NAME)
 models_volume = modal.Volume.from_name(VOLUME_NAME, create_if_missing=True)
-image = modal.Image.from_registry("rhydam12/sf3d-gpu-worker:latest", add_python="3.10").pip_install("httpx")
+image = (
+    modal.Image.from_registry("rhydam12/sf3d-gpu-worker:latest", add_python="3.10")
+    .pip_install("httpx")
+    .run_commands(
+        "python - <<'PY'\n"
+        "from pathlib import Path\n"
+        "root = Path('/app/stable-fast-3d')\n"
+        "if root.is_dir():\n"
+        "    for path in root.rglob('*.py'):\n"
+        "        text = path.read_text(errors='ignore')\n"
+        "        patched = text.replace('from torch.amp import custom_bwd, custom_fwd', 'from torch.cuda.amp import custom_bwd, custom_fwd')\n"
+        "        patched = patched.replace('from torch.amp import custom_fwd, custom_bwd', 'from torch.cuda.amp import custom_fwd, custom_bwd')\n"
+        "        if patched != text:\n"
+        "            path.write_text(patched)\n"
+        "            print('patched', path)\n"
+        "PY"
+    )
+)
 
 
 def decode_image(data: Any):
@@ -168,6 +185,17 @@ class SF3DModel:
     def load_model(self):
         import torch
         from huggingface_hub import login
+        import torch.amp as _amp
+        try:
+            from torch.cuda.amp import custom_bwd as _cbwd, custom_fwd as _cfwd
+        except ImportError:
+            def _cfwd(fn=None, **kwargs):
+                return fn if fn is not None else (lambda f: f)
+            _cbwd = _cfwd
+        if not hasattr(_amp, "custom_fwd"):
+            _amp.custom_fwd = _cfwd
+        if not hasattr(_amp, "custom_bwd"):
+            _amp.custom_bwd = _cbwd
         # Image torch does not export these from torch.amp; SF3D imports them there.
         root = Path("/app/stable-fast-3d")
         if root.is_dir():
