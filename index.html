@@ -136,7 +136,7 @@ function showDebug(){
   const platform = tgApp ? (tgApp.platform || "?") : (fromHash ? "hash" : "none");
   const version = tgApp ? (tgApp.version || "?") : "?";
   box.innerHTML =
-    "TG: " + (hasTg ? "yes" : "NO") +
+    "ui4 | TG: " + (hasTg ? "yes" : "NO") +
     " | initData: " + initLen +
     " chars | user: " + (hasUser ? "yes" : "no") +
     " | " + platform + " v" + version;
@@ -172,7 +172,7 @@ async function refreshCredits(){
   } catch (e) { setCredits(0, false); }
 }
 
-function compressImage(file, maxSide=1280, q=0.86){
+function compressImage(file, maxSide=1200, q=0.84){
   return new Promise((resolve, reject) => {
     const r = new FileReader();
     r.onload = () => {
@@ -318,6 +318,20 @@ function isNetworkError(err){
   const msg = String(err && err.message || err || "");
   return msg === "Failed to fetch" || msg === "Load failed" || msg.indexOf("NetworkError") >= 0 || msg.indexOf("network") >= 0;
 }
+function postSimple(url, body){
+  // text/plain is a "simple" request: no CORS preflight. Telegram's webview
+  // often kills the preflight and surfaces it as "Failed to fetch".
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open("POST", url);
+    xhr.setRequestHeader("Content-Type", "text/plain;charset=UTF-8");
+    xhr.timeout = 20000;
+    xhr.onload = function(){ resolve({status: xhr.status, text: xhr.responseText || ""}); };
+    xhr.onerror = function(){ reject(new Error("Failed to fetch")); };
+    xhr.ontimeout = function(){ reject(new Error("Failed to fetch")); };
+    xhr.send(body);
+  });
+}
 async function postJob(imageData){
   const clientReq = newReqId();
   const body = JSON.stringify({
@@ -332,29 +346,26 @@ async function postJob(imageData){
   let lastErr;
   for (let attempt = 0; attempt < 2; attempt++) {
     try {
-      const res = await fetch(MODAL_BASE + "/", {
-        method: "POST",
-        headers: {"Content-Type": "application/json"},
-        body: body
-      });
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(data.detail || ("HTTP " + res.status));
+      const res = await postSimple(MODAL_BASE + "/", body);
+      let data = {};
+      try { data = JSON.parse(res.text || "{}"); } catch (e) {}
+      if (res.status < 200 || res.status >= 300) throw new Error(data.detail || ("HTTP " + res.status));
       if (!data.job_id) throw new Error("No job id");
       return data.job_id;
     } catch (err) {
       lastErr = err;
       if (!isNetworkError(err) || attempt === 1) break;
       setStatus('<span class="spinner"></span> Reconnecting…');
-      await new Promise(r => setTimeout(r, 1500));
+      await new Promise(r => setTimeout(r, 1200));
     }
   }
   if (isNetworkError(lastErr)) {
-    throw new Error("Could not reach the server. Wait 20 seconds and tap Generate again.");
+    throw new Error("Could not reach the server. Close the app, open it from the new button, and try once.");
   }
   throw lastErr;
 }
 
-async function pollJob(jobId, maxWaitMs=240000){
+async function pollJob(jobId, maxWaitMs=720000){
   const t0 = Date.now();
   let delay = 2000;
   while (Date.now() - t0 < maxWaitMs) {
@@ -362,18 +373,21 @@ async function pollJob(jobId, maxWaitMs=240000){
     delay = Math.min(delay + 500, 4000);
     const res = await fetch(MODAL_BASE + "/job/" + jobId);
     if (res.status === 404) {
-      setStatus('<span class="spinner"></span> Waiting for GPU…');
+      const mins = Math.max(1, Math.round((Date.now() - t0) / 60000));
+      setStatus('<span class="spinner"></span> Waiting for a live L4… ' + mins + ' min. Leave this open.');
       continue;
     }
     const data = await res.json().catch(() => ({}));
     if (data.status === "queued" || data.status === "running") {
-      setStatus('<span class="spinner"></span> ' + (data.detail || (data.status === "running" ? "Generating…" : "Waiting for a live L4…")));
+      const mins = Math.max(1, Math.round((Date.now() - t0) / 60000));
+      const label = data.status === "running" ? "Generating 3D…" : (data.detail || "Waiting for a live L4…");
+      setStatus('<span class="spinner"></span> ' + label + " · " + mins + " min");
       continue;
     }
     if (data.status === "error") throw new Error(data.error || "GPU error");
     if (data.status === "done" || data.asset_id || data.model) return data;
   }
-  throw new Error("Timed out");
+  throw new Error("Still waiting on a GPU. Don't tap again — check back in a minute.");
 }
 
 async function generate3D(){
@@ -383,9 +397,9 @@ async function generate3D(){
   if (!isFreeUser && userCredits < 1) { setStatus("No balance — top up below", "error"); return; }
   btn.disabled = true;
   try {
-    setStatus('<span class="spinner"></span> Starting GPU…');
+    setStatus('<span class="spinner"></span> Sending photo…');
     const jobId = await postJob(selectedBase64);
-    setStatus('<span class="spinner"></span> Generating 3D model…');
+    setStatus('<span class="spinner"></span> Waiting for a live L4. This can take a few minutes.');
     const data = await pollJob(jobId);
     if (data.model) {
       currentModelBlob = modelFromBase64(data.model);

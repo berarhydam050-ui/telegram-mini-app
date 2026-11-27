@@ -30,3 +30,11 @@ jobs:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
         run: |
           modal deploy app.py
+
+      - name: Point bot at the updated page
+        env:
+          MODAL_TOKEN_ID: ${{ secrets.MODAL_TOKEN_ID }}
+          MODAL_TOKEN_SECRET: ${{ secrets.MODAL_TOKEN_SECRET }}
+        run: |
+          modal run app.py::publish_webapp
+

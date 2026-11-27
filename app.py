@@ -46,6 +46,9 @@ BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN") or os.environ.get("BOT_TOKEN")
 app = modal.App(APP_NAME)
 models_volume = modal.Volume.from_name(VOLUME_NAME, create_if_missing=True)
 image = modal.Image.from_registry("rhydam12/sf3d-gpu-worker:latest", add_python="3.10").pip_install("httpx")
+# Web app only. Keeps the GPU image unchanged so a UI update does not rebuild the GPU layer.
+web_image = image.add_local_file("index.html", "/root/form3d-index.html")
+UI_URL = "https://berarhydam050--sf3d-backend-generate.modal.run/ui?v=4"
 
 
 def decode_image(data: Any):
@@ -401,7 +404,33 @@ class SF3DModel:
 
 
 @app.function(
-    image=image, volumes={CACHE_DIR: models_volume}, scaledown_window=120, timeout=60,
+    image=modal.Image.debian_slim(python_version="3.11").pip_install("httpx"),
+    secrets=[modal.Secret.from_name("telegram-bot-secret")],
+    timeout=60,
+)
+def publish_webapp():
+    """CPU-only. Points the bot button at the uncached page. Does not start a GPU."""
+    import httpx
+    token = os.environ.get("TELEGRAM_BOT_TOKEN") or os.environ.get("BOT_TOKEN")
+    if not token:
+        raise RuntimeError("telegram bot token missing")
+    base = f"https://api.telegram.org/bot{token}"
+    menu = httpx.post(base + "/getChatMenuButton", json={}, timeout=20).json()
+    print("current menu", menu)
+    new_menu = httpx.post(base + "/setChatMenuButton", json={
+        "menu_button": {"type": "web_app", "text": "Image to 3D", "web_app": {"url": UI_URL}}
+    }, timeout=20).json()
+    print("set menu", new_menu)
+    note = httpx.post(base + "/sendMessage", json={
+        "chat_id": 6187218793,
+        "text": "Form3D is updated. Open it from this button so Telegram loads the new page. Finding a live L4 can take a few minutes. Leave it on Waiting, and tap Generate only once.",
+        "reply_markup": {"inline_keyboard": [[{"text": "Open Form3D", "web_app": {"url": UI_URL}}]]},
+    }, timeout=20).json()
+    print("notify", {k: note.get(k) for k in ("ok", "description")})
+
+
+@app.function(
+    image=web_image, volumes={CACHE_DIR: models_volume}, scaledown_window=120, timeout=180,
     secrets=[
         modal.Secret.from_name("huggingface-secret"),
         modal.Secret.from_name("telegram-bot-secret"),
@@ -409,8 +438,8 @@ class SF3DModel:
 )
 @modal.asgi_app()
 def generate():
-    from fastapi import FastAPI, HTTPException, Request, Header
-    from fastapi.responses import Response, JSONResponse
+    from fastapi import BackgroundTasks, FastAPI, HTTPException, Request, Header
+    from fastapi.responses import HTMLResponse, Response, JSONResponse
     from fastapi.middleware.cors import CORSMiddleware
     import asyncio
     import httpx
@@ -421,6 +450,12 @@ def generate():
         allow_methods=["POST", "GET", "HEAD", "OPTIONS"], allow_headers=["*"],
         expose_headers=["Content-Disposition", "Content-Length", "Content-Type"],
     )
+    recent_reqs = {}
+
+    @web_app.get("/ui")
+    async def ui_page():
+        html = Path("/root/form3d-index.html").read_text()
+        return HTMLResponse(html, headers={"Cache-Control": "no-store, max-age=0"})
 
     def bot_token():
         return os.environ.get("TELEGRAM_BOT_TOKEN") or os.environ.get("BOT_TOKEN") or BOT_TOKEN
@@ -593,9 +628,9 @@ def generate():
     def _req_path(client_req: str) -> Path:
         return Path(CACHE_DIR) / "reqs" / f"{client_req}.json"
 
-    def accept_job(data: dict) -> dict:
-        # Worker thread: a slow volume commit must not freeze the web worker.
-        # That freeze is what the mini app shows as "Failed to fetch".
+    def accept_job(data: dict, job_id: str, user) -> None:
+        # Runs after the HTTP response is already on the way. Volume commits and
+        # GPU queueing can take minutes while an L4 is found; the phone must not wait.
         data.setdefault("texture_resolution", DEFAULT_TEXTURE_RESOLUTION)
         data.setdefault("remesh", REMESH_MODE)
         data.setdefault("return_base64", False)
@@ -604,20 +639,9 @@ def generate():
             client_req = ""
         if client_req:
             prev = _vol_read(_req_path(client_req))
-            if prev and prev.get("job_id"):
-                return {
-                    "success": True,
-                    "status": prev.get("status") or "queued",
-                    "job_id": prev["job_id"],
-                    "poll_url": f"/job/{prev['job_id']}",
-                    "reused": True,
-                }
-        user = None
-        if bot_token():
-            try:
-                user = validate_init_data(data.get("initData") or data.get("init_data") or "")
-            except ValueError as e:
-                raise HTTPException(402, str(e))
+            if prev and prev.get("job_id") and prev.get("job_id") != job_id:
+                return
+        if user and bot_token():
             payment_id = data.get("payment_id") or data.get("paymentId") or ""
             if payment_id:
                 pay = read_payment(payment_id)
@@ -632,9 +656,9 @@ def generate():
             try:
                 consume_credit(user["id"])
             except ValueError as e:
-                raise HTTPException(402, str(e))
+                write_job(job_id, {"status": "error", "job_id": job_id, "error": str(e), "user_id": int(user["id"])})
+                return
         tg_user_id = int(user["id"]) if user else None
-        job_id = str(uuid.uuid4())
         gpu_item = {
             "image": data.get("image") or data.get("image_base64") or data.get("imageBase64"),
             "texture_resolution": data.get("texture_resolution"),
@@ -662,28 +686,51 @@ def generate():
                 "error": f"Could not queue GPU: {type(exc).__name__}: {exc}",
                 "user_id": tg_user_id,
             })
-            raise HTTPException(503, "Could not queue a GPU. Wait a moment and tap Generate again.")
-        return {"success": True, "status": "queued", "job_id": job_id, "poll_url": f"/job/{job_id}"}
+            return
+
+    async def _kick(data: dict, job_id: str, user):
+        try:
+            await asyncio.to_thread(accept_job, data, job_id, user)
+        except Exception as exc:
+            traceback.print_exc()
+            try:
+                await asyncio.to_thread(write_job, job_id, {
+                    "status": "error", "job_id": job_id,
+                    "error": f"{type(exc).__name__}: {exc}",
+                    "user_id": int(user["id"]) if user else None,
+                })
+            except Exception:
+                pass
 
     @web_app.post("/")
-    async def run_generate(request: Request, x_api_key: str | None = Header(None)):
+    async def run_generate(request: Request, background: BackgroundTasks, x_api_key: str | None = Header(None)):
         key = os.environ.get("MODAL_API_KEY") or API_KEY
         if key and x_api_key != key:
             raise HTTPException(401, "Unauthorized")
         try:
-            data = await request.json()
+            data = json.loads((await request.body()).decode("utf-8") or "{}")
         except Exception:
             raise HTTPException(400, "Invalid JSON")
-        try:
-            return await asyncio.wait_for(asyncio.to_thread(accept_job, data), timeout=25)
-        except HTTPException:
-            raise
-        except asyncio.TimeoutError:
-            raise HTTPException(503, "Server is busy releasing a stuck GPU. Wait 20 seconds and tap Generate again.")
-        except ValueError as e:
-            raise HTTPException(400, str(e))
-        except Exception as e:
-            traceback.print_exc()
-            raise HTTPException(500, f"SF3D generation failed: {type(e).__name__}: {e}")
+        if not isinstance(data, dict):
+            raise HTTPException(400, "Invalid JSON")
+        user = None
+        if bot_token():
+            try:
+                user = validate_init_data(data.get("initData") or data.get("init_data") or "")
+            except ValueError as e:
+                raise HTTPException(402, str(e))
+        client_req = str(data.get("client_req") or "")
+        if not REQ_RE.fullmatch(client_req):
+            client_req = ""
+        if client_req and client_req in recent_reqs:
+            job_id = recent_reqs[client_req]
+            return {"success": True, "status": "queued", "job_id": job_id, "poll_url": f"/job/{job_id}", "reused": True}
+        job_id = str(uuid.uuid4())
+        if client_req:
+            recent_reqs[client_req] = job_id
+            if len(recent_reqs) > 300:
+                recent_reqs.pop(next(iter(recent_reqs)))
+        background.add_task(_kick, data, job_id, user)
+        return {"success": True, "status": "queued", "job_id": job_id, "poll_url": f"/job/{job_id}"}
 
     return web_app
