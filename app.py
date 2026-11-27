@@ -211,20 +211,97 @@ def _patch_texture_baker_cpu_fallback():
     TextureBaker._cpu_fallback_patched = True
 
 
+def _cuda_is_live() -> bool:
+    """Fast check only. Do not load weights on a dead L4 — that is what burns credit."""
+    import ctypes
+    import time
+    try:
+        cu = ctypes.CDLL("libcuda.so.1")
+    except OSError as exc:
+        print("libcuda missing:", exc)
+        return False
+    for attempt in range(6):
+        try:
+            rc = int(cu.cuInit(0))
+        except Exception as exc:
+            print("cuInit exception:", exc)
+            rc = -1
+        if rc == 0:
+            print(f"cuInit ok (attempt {attempt + 1})")
+            return True
+        print(f"cuInit failed attempt {attempt + 1}/6 rc={rc}")
+        time.sleep(0.35)
+    return False
+
+
+def _release_bad_gpu():
+    try:
+        modal.experimental.stop_fetching_inputs()
+        print("Released unhealthy L4 so the job can land on another live one")
+    except Exception as exc:
+        print("stop_fetching_inputs failed:", exc)
+
+
+def _bump_gpu_attempt(job_id: str) -> int:
+    path = Path(CACHE_DIR) / "jobs" / f"{job_id}.attempts"
+    try:
+        models_volume.reload()
+    except Exception:
+        pass
+    n = 0
+    if path.is_file():
+        try:
+            n = int(path.read_text().strip() or "0")
+        except Exception:
+            n = 0
+    n += 1
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(str(n))
+    try:
+        models_volume.commit()
+    except Exception:
+        pass
+    return n
+
+
 @app.cls(
     image=image,
-    gpu="L4",  # L4 only \u2014 do not fall back to A10G
+    # Any L4 Modal can place, not one pinned machine. Dead cards are dropped in enter().
+    gpu="L4",
     volumes={CACHE_DIR: models_volume},
-    scaledown_window=120,
+    # Idle GPU bills by the second. 15s covers a retry, then it shuts off.
+    scaledown_window=15,
     enable_memory_snapshot=False,
     secrets=[modal.Secret.from_name("huggingface-secret")],
     timeout=900,
+    startup_timeout=420,
     max_containers=1,
+    # Only the explicit "L4 not live" raise uses these. Inference errors return.
+    retries=2,
 )
 
 class SF3DModel:
     @modal.enter()
     def load_model(self):
+        self.ready = False
+        self.fatal_error = None
+        # Refuse a dead L4 before touching the model. A 3s CUDA failure must not
+        # download weights or crash-loop (deployed apps retry crashes forever).
+        if not _cuda_is_live():
+            print("This L4 is not live - not loading the model")
+            _release_bad_gpu()
+            return
+        try:
+            self._load_weights()
+            self.ready = True
+            print("L4 live, model ready")
+        except Exception as exc:
+            traceback.print_exc()
+            self.fatal_error = f"{type(exc).__name__}: {exc}"
+            self.ready = False
+            _release_bad_gpu()
+
+    def _load_weights(self):
         import torch
         from huggingface_hub import login
         import torch.amp as _amp
@@ -256,12 +333,27 @@ class SF3DModel:
         from rembg import new_session
         remove_background_and_center._session = new_session("u2net")
         torch.cuda.empty_cache()
-        print("Snapshot ready")
 
     @modal.method()
     def process_image(self, item: dict):
         import torch
         job_id = item.get("job_id")
+        if not getattr(self, "ready", False):
+            fatal = getattr(self, "fatal_error", None)
+            if fatal:
+                if job_id:
+                    write_job(job_id, {"status": "error", "job_id": job_id, "error": fatal, "user_id": item.get("user_id")})
+                return {"success": False, "status": "error", "error": fatal, "job_id": job_id}
+            n = _bump_gpu_attempt(job_id) if job_id else 1
+            if n >= 3:
+                msg = "No live L4 right now. Wait a minute and tap Generate again."
+                if job_id:
+                    write_job(job_id, {"status": "error", "job_id": job_id, "error": msg, "user_id": item.get("user_id")})
+                return {"success": False, "status": "error", "error": msg, "job_id": job_id}
+            if job_id:
+                write_job(job_id, {"status": "queued", "job_id": job_id, "detail": "Switching to another L4", "user_id": item.get("user_id")})
+            # Finite retry (retries=2). Do not crash the container - that loops forever on a deployed app.
+            raise RuntimeError("L4 not live")
         if job_id:
             write_job(job_id, {"status": "running", "job_id": job_id, "user_id": item.get("user_id")})
         try:
@@ -290,16 +382,20 @@ class SF3DModel:
             if item.get("return_base64", True):
                 result["model"] = base64.b64encode(glb_bytes).decode("utf-8")
             if job_id:
-                st = {"status": "done", "job_id": job_id, "asset_id": asset_id, "download_url": f"/download/{asset_id}", "user_id": item.get("user_id")}
-                if item.get("return_base64", True) and len(result.get("model", "")) < 16_000_000:
-                    st["model"] = result["model"]
-                write_job(job_id, st)
+                # Keep the job record small. The GLB is downloaded separately.
+                # Stuffing the model into the volume commit was stalling the API.
+                write_job(job_id, {
+                    "status": "done", "job_id": job_id, "asset_id": asset_id,
+                    "download_url": f"/download/{asset_id}", "user_id": item.get("user_id"),
+                })
             return result
         except Exception as exc:
             traceback.print_exc()
+            err = f"{type(exc).__name__}: {exc}"
             if job_id:
-                write_job(job_id, {"status": "error", "job_id": job_id, "error": f"{type(exc).__name__}: {exc}", "user_id": item.get("user_id")})
-            raise
+                write_job(job_id, {"status": "error", "job_id": job_id, "error": err, "user_id": item.get("user_id")})
+            # Return, don't raise: a raised inference error would run the GPU again.
+            return {"success": False, "status": "error", "error": err, "job_id": job_id}
         finally:
             torch.cuda.empty_cache()
 
@@ -316,6 +412,7 @@ def generate():
     from fastapi import FastAPI, HTTPException, Request, Header
     from fastapi.responses import Response, JSONResponse
     from fastapi.middleware.cors import CORSMiddleware
+    import asyncio
     import httpx
 
     web_app = FastAPI(title="SF3D Image-to-3D API")
@@ -349,6 +446,7 @@ def generate():
     async def health():
         return {
             "status": "ok", "service": APP_NAME, "model": MODEL_ID, "gpu": "L4",
+            "scheduler": "any-live-l4",
             "packs": {k: {"stars": v["stars"], "credits": v["credits"]} for k, v in PACKS.items()},
             "payments_enabled": bool(bot_token()),
         }
@@ -375,10 +473,10 @@ def generate():
         if not UUID_RE.fullmatch(job_id):
             raise HTTPException(400, "Bad job id")
         for _ in range(3):
-            data = read_job(job_id)
+            data = await asyncio.to_thread(read_job, job_id)
             if data:
                 return data
-            time.sleep(0.4)
+            await asyncio.sleep(0.25)
         raise HTTPException(404, "Job not found")
 
     @web_app.get("/pay/{payment_id}")
@@ -474,12 +572,12 @@ def generate():
         path = Path(CACHE_DIR) / "outputs" / f"{asset_id}.glb"
         for _ in range(5):
             try:
-                models_volume.reload()
+                await asyncio.to_thread(models_volume.reload)
             except Exception:
                 pass
             if path.is_file():
                 break
-            time.sleep(0.8)
+            await asyncio.sleep(0.4)
         if not path.is_file():
             raise HTTPException(404, "Asset not found or expired")
         return Response(
@@ -490,6 +588,83 @@ def generate():
             },
         )
 
+    REQ_RE = re.compile(r"^[A-Za-z0-9_-]{8,80}$")
+
+    def _req_path(client_req: str) -> Path:
+        return Path(CACHE_DIR) / "reqs" / f"{client_req}.json"
+
+    def accept_job(data: dict) -> dict:
+        # Worker thread: a slow volume commit must not freeze the web worker.
+        # That freeze is what the mini app shows as "Failed to fetch".
+        data.setdefault("texture_resolution", DEFAULT_TEXTURE_RESOLUTION)
+        data.setdefault("remesh", REMESH_MODE)
+        data.setdefault("return_base64", False)
+        client_req = str(data.get("client_req") or "")
+        if not REQ_RE.fullmatch(client_req):
+            client_req = ""
+        if client_req:
+            prev = _vol_read(_req_path(client_req))
+            if prev and prev.get("job_id"):
+                return {
+                    "success": True,
+                    "status": prev.get("status") or "queued",
+                    "job_id": prev["job_id"],
+                    "poll_url": f"/job/{prev['job_id']}",
+                    "reused": True,
+                }
+        user = None
+        if bot_token():
+            try:
+                user = validate_init_data(data.get("initData") or data.get("init_data") or "")
+            except ValueError as e:
+                raise HTTPException(402, str(e))
+            payment_id = data.get("payment_id") or data.get("paymentId") or ""
+            if payment_id:
+                pay = read_payment(payment_id)
+                if pay and pay.get("status") == "paid" and not pay.get("used"):
+                    if int(pay.get("user_id") or 0) != int(user["id"]):
+                        raise HTTPException(402, "Payment belongs to another user")
+                    pay["used"] = True
+                    write_payment(payment_id, pay)
+                    u = get_user(user["id"])
+                    if int(u.get("credits") or 0) < 1 and int(pay.get("credits") or 0) >= 1:
+                        add_credits(user["id"], int(pay["credits"]))
+            try:
+                consume_credit(user["id"])
+            except ValueError as e:
+                raise HTTPException(402, str(e))
+        tg_user_id = int(user["id"]) if user else None
+        job_id = str(uuid.uuid4())
+        gpu_item = {
+            "image": data.get("image") or data.get("image_base64") or data.get("imageBase64"),
+            "texture_resolution": data.get("texture_resolution"),
+            "remesh": data.get("remesh"),
+            "return_base64": bool(data.get("return_base64", False)),
+            "job_id": job_id,
+            "user_id": tg_user_id,
+        }
+        job_meta = {"status": "queued", "job_id": job_id}
+        if tg_user_id:
+            job_meta["user_id"] = tg_user_id
+        write_job(job_id, job_meta)
+        if client_req:
+            _vol_write(_req_path(client_req), {"job_id": job_id, "status": "queued", "user_id": tg_user_id})
+        try:
+            SF3DModel().process_image.spawn(gpu_item)
+        except Exception as exc:
+            if tg_user_id and int(tg_user_id) not in FREE_USER_IDS:
+                try:
+                    add_credits(int(tg_user_id), 1)
+                except Exception:
+                    pass
+            write_job(job_id, {
+                "status": "error", "job_id": job_id,
+                "error": f"Could not queue GPU: {type(exc).__name__}: {exc}",
+                "user_id": tg_user_id,
+            })
+            raise HTTPException(503, "Could not queue a GPU. Wait a moment and tap Generate again.")
+        return {"success": True, "status": "queued", "job_id": job_id, "poll_url": f"/job/{job_id}"}
+
     @web_app.post("/")
     async def run_generate(request: Request, x_api_key: str | None = Header(None)):
         key = os.environ.get("MODAL_API_KEY") or API_KEY
@@ -497,47 +672,14 @@ def generate():
             raise HTTPException(401, "Unauthorized")
         try:
             data = await request.json()
-            data.setdefault("texture_resolution", DEFAULT_TEXTURE_RESOLUTION)
-            data.setdefault("remesh", REMESH_MODE)
-            data.setdefault("return_base64", True)
-            if bot_token():
-                try:
-                    user = validate_init_data(data.get("initData") or data.get("init_data") or "")
-                    payment_id = data.get("payment_id") or data.get("paymentId") or ""
-                    if payment_id:
-                        pay = read_payment(payment_id)
-                        if pay and pay.get("status") == "paid" and not pay.get("used"):
-                            if int(pay.get("user_id") or 0) != int(user["id"]):
-                                raise ValueError("Payment belongs to another user")
-                            pay["used"] = True
-                            write_payment(payment_id, pay)
-                            u = get_user(user["id"])
-                            if int(u.get("credits") or 0) < 1 and int(pay.get("credits") or 0) >= 1:
-                                add_credits(user["id"], int(pay["credits"]))
-                    consume_credit(user["id"])
-                except ValueError as e:
-                    raise HTTPException(402, str(e))
-            tg_user_id = None
-            if bot_token():
-                try:
-                    u = validate_init_data(data.get("initData") or data.get("init_data") or "")
-                    tg_user_id = int(u["id"])
-                except Exception:
-                    pass
-            job_id = str(uuid.uuid4())
-            data["job_id"] = job_id
-            if tg_user_id:
-                data["user_id"] = tg_user_id
-            job_meta = {"status": "queued", "job_id": job_id}
-            if tg_user_id:
-                job_meta["user_id"] = tg_user_id
-            write_job(job_id, job_meta)
-            call = SF3DModel().process_image.spawn(data)
-            if not data.get("async", True):
-                return call.get()
-            return {"success": True, "status": "queued", "job_id": job_id, "poll_url": f"/job/{job_id}"}
+        except Exception:
+            raise HTTPException(400, "Invalid JSON")
+        try:
+            return await asyncio.wait_for(asyncio.to_thread(accept_job, data), timeout=25)
         except HTTPException:
             raise
+        except asyncio.TimeoutError:
+            raise HTTPException(503, "Server is busy releasing a stuck GPU. Wait 20 seconds and tap Generate again.")
         except ValueError as e:
             raise HTTPException(400, str(e))
         except Exception as e:
