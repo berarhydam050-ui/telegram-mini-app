@@ -19,7 +19,7 @@ import modal
 
 APP_NAME = "sf3d-backend"
 VOLUME_NAME = "sf3d-models-volume"
-CACHE_DIR = "/root/.cache"
+CACHE_DIR = "/data"
 MODEL_ID = "stabilityai/stable-fast-3d"
 GPU_DEVICE = "cuda:0"
 DEFAULT_TEXTURE_RESOLUTION = 2048
@@ -49,7 +49,7 @@ web_image = (
     .pip_install("fastapi", "httpx")
     .add_local_file("index.html", "/root/form3d-index.html")
 )
-UI_URL = "https://berarhydam050--sf3d-backend-generate.modal.run/ui?v=5"
+UI_URL = "https://berarhydam050--sf3d-backend-generate.modal.run/ui?v=6"
 WEBHOOK_URL = "https://berarhydam050--sf3d-backend-generate.modal.run/telegram/webhook"
 
 
